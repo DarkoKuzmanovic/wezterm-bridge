@@ -206,6 +206,124 @@ resolve_target() {
     resolve_label "$target"
 }
 
+# --- Workflow Tokenizer ---
+
+tokenize_line() {
+    local line="$1"
+    local var_lookup="$2"
+    TOKENS=()
+    local i=0 len=${#line} token="" in_quotes=false
+
+    while (( i < len )); do
+        local ch="${line:i:1}"
+
+        # Reject single quotes
+        if [[ "$ch" == "'" ]] && ! $in_quotes; then
+            die "single quotes are not supported in workflow files"
+        fi
+
+        # Reject backticks
+        if [[ "$ch" == '`' ]]; then
+            die "backtick substitution is not allowed in workflow files"
+        fi
+
+        if $in_quotes; then
+            if [[ "$ch" == '\' ]]; then
+                local next="${line:i+1:1}"
+                case "$next" in
+                    '"')  token+='"' ;;
+                    '\') token+='\' ;;
+                    '$') token+='$' ;;
+                    *)    die "invalid escape '\\$next' in workflow file (allowed: \\\", \\\\, \\\$)" ;;
+                esac
+                (( i += 2 ))
+            elif [[ "$ch" == '"' ]]; then
+                in_quotes=false
+                (( i++, 1 ))
+            elif [[ "$ch" == '$' ]]; then
+                local next="${line:i+1:1}"
+                if [[ "$next" == '(' ]]; then
+                    die "\$(...) command substitution is not allowed in workflow files"
+                fi
+                if [[ "$next" == '{' ]]; then
+                    die "\${...} brace expansion is not allowed in workflow files"
+                fi
+                local varname=""
+                local j=$(( i + 1 ))
+                while (( j < len )) && [[ "${line:j:1}" =~ [A-Za-z0-9_] ]]; do
+                    varname+="${line:j:1}"
+                    (( j++, 1 ))
+                done
+                if [[ -z "$varname" ]]; then
+                    die "bare \$ in workflow file (use \\\$ for literal dollar)"
+                fi
+                local varval
+                if ! varval="$("$var_lookup" "$varname")"; then
+                    die "undefined variable '\$$varname' in workflow file"
+                fi
+                token+="$varval"
+                i=$j
+            else
+                token+="$ch"
+                (( i++, 1 ))
+            fi
+        else
+            if [[ "$ch" == '"' ]]; then
+                in_quotes=true
+                (( i++, 1 ))
+            elif [[ "$ch" == ' ' || "$ch" == $'\t' ]]; then
+                if [[ -n "$token" ]]; then
+                    TOKENS+=("$token")
+                    token=""
+                fi
+                (( i++, 1 ))
+            elif [[ "$ch" == '\' ]]; then
+                local next="${line:i+1:1}"
+                if [[ "$next" == '$' ]]; then
+                    token+='$'
+                    (( i += 2 ))
+                else
+                    die "invalid escape '\\$next' outside quotes in workflow file"
+                fi
+            elif [[ "$ch" == '$' ]]; then
+                local next="${line:i+1:1}"
+                if [[ "$next" == '(' ]]; then
+                    die "\$(...) command substitution is not allowed in workflow files"
+                fi
+                if [[ "$next" == '{' ]]; then
+                    die "\${...} brace expansion is not allowed in workflow files"
+                fi
+                local varname=""
+                local j=$(( i + 1 ))
+                while (( j < len )) && [[ "${line:j:1}" =~ [A-Za-z0-9_] ]]; do
+                    varname+="${line:j:1}"
+                    (( j++, 1 ))
+                done
+                if [[ -z "$varname" ]]; then
+                    die "bare \$ in workflow file (use \\\$ for literal dollar)"
+                fi
+                local varval
+                if ! varval="$("$var_lookup" "$varname")"; then
+                    die "undefined variable '\$$varname' in workflow file"
+                fi
+                token+="$varval"
+                i=$j
+            else
+                token+="$ch"
+                (( i++, 1 ))
+            fi
+        fi
+    done
+
+    if $in_quotes; then
+        die "unterminated quote in workflow file"
+    fi
+
+    if [[ -n "$token" ]]; then
+        TOKENS+=("$token")
+    fi
+}
+
 # --- Commands ---
 
 cmd_id() {
@@ -858,4 +976,8 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${1:-}" == "--source-only" ]]; then
+    return 0 2>/dev/null || true
+else
+    main "$@"
+fi
