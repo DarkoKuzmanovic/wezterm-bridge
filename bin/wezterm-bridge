@@ -437,11 +437,16 @@ cmd_wait() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --match)   match="$2"; (( conditions += 1 )); shift 2 ;;
-            --quiet)   quiet="$2"; (( conditions += 1 )); shift 2 ;;
+            --match)   [[ $# -ge 2 ]] || die "--match requires an argument"
+                       [[ -n "$2" ]] || die "--match requires a non-empty regex"
+                       match="$2"; (( conditions += 1 )); shift 2 ;;
+            --quiet)   [[ $# -ge 2 ]] || die "--quiet requires an argument"
+                       quiet="$2"; (( conditions += 1 )); shift 2 ;;
             --prompt)  prompt=true; (( conditions += 1 )); shift ;;
-            --timeout) timeout="$2"; shift 2 ;;
-            --interval) interval="$2"; shift 2 ;;
+            --timeout) [[ $# -ge 2 ]] || die "--timeout requires an argument"
+                       timeout="$2"; shift 2 ;;
+            --interval) [[ $# -ge 2 ]] || die "--interval requires an argument"
+                        interval="$2"; shift 2 ;;
             *)         die "unknown flag '$1' for wait" ;;
         esac
     done
@@ -454,7 +459,7 @@ cmd_wait() {
     fi
 
     # Validate numeric args
-    if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
+    if [[ ! "$timeout" =~ ^[0-9]+$ ]] || [[ "$timeout" -eq 0 ]]; then
         die "timeout must be a positive integer, got '$timeout'"
     fi
     if [[ ! "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -eq 0 ]]; then
