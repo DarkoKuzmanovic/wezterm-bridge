@@ -9,13 +9,21 @@ CURSOR_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/cursors"
 LOCK_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/locks"
 JSON_OUTPUT=false
 
+json_escape() {
+    local val="$1"
+    val="${val//\\/\\\\}"
+    val="${val//\"/\\\"}"
+    val="${val//$'\n'/\\n}"
+    val="${val//$'\t'/\\t}"
+    printf '%s' "$val"
+}
+
 json_ok() {
     local cmd="$1"; shift
     printf '{"status":"ok","command":"%s"' "$cmd"
     while [[ $# -gt 0 ]]; do
         local key="${1%%=*}" val="${1#*=}"
-        # Escape double quotes in val
-        val="${val//\"/\\\"}"
+        val="$(json_escape "$val")"
         printf ',"%s":"%s"' "$key" "$val"
         shift
     done
@@ -23,8 +31,8 @@ json_ok() {
 }
 
 json_error() {
-    local msg="$1"
-    msg="${msg//\"/\\\"}"
+    local msg
+    msg="$(json_escape "$1")"
     printf '{"status":"error","message":"%s"}\n' "$msg" >&2
     exit 1
 }
@@ -88,8 +96,10 @@ save_cursor() {
     mkdir -p "$CURSOR_DIR"
     local line_count
     line_count="$(printf '%s\n' "$content" | wc -l | tr -d ' ')"
+    local last_line
+    last_line="$(printf '%s\n' "$content" | tail -1)"
     local last_line_hash
-    last_line_hash="$(printf '%s\n' "$content" | tail -1 | cksum | cut -d' ' -f1)"
+    last_line_hash="$(printf '%s' "$last_line" | cksum | cut -d' ' -f1)"
     printf '%s:%s\n' "$line_count" "$last_line_hash" > "$CURSOR_DIR/$pane_id"
 }
 
@@ -383,6 +393,30 @@ cmd_list() {
 
     ensure_label_dir
 
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        local raw_json
+        raw_json="$(wezterm cli list --format json)"
+        # Inject labels into each pane entry
+        local enriched
+        enriched="$(printf '%s' "$raw_json" | jq -c '[.[] | {pane_id: .pane_id, tab_id: .tab_id, title: .title, cwd: .cwd}]')"
+        # Add labels
+        local result="["
+        local first=true
+        printf '%s' "$raw_json" | jq -r '.[] | "\(.pane_id)\t\(.tab_id)\t\(.title)\t\(.cwd)"' | \
+        while IFS=$'\t' read -r pane_id tab_id title cwd; do
+            local label=""
+            if [[ -f "$LABEL_DIR/$pane_id" ]]; then
+                label="$(cat "$LABEL_DIR/$pane_id")"
+            fi
+            cwd="${cwd/#$HOME/~}"
+            if $first; then first=false; else printf ','; fi
+            printf '{"pane_id":"%s","tab_id":"%s","title":"%s","label":"%s","cwd":"%s"}' \
+                "$pane_id" "$tab_id" "$(json_escape "$title")" "$(json_escape "$label")" "$(json_escape "$cwd")"
+        done
+        printf ']\n'
+        return
+    fi
+
     # Header
     printf "%-8s %-6s %-20s %-10s %s\n" "PANE_ID" "TAB" "TITLE" "LABEL" "CWD"
     printf "%-8s %-6s %-20s %-10s %s\n" "-------" "-----" "--------------------" "----------" "---"
@@ -495,7 +529,7 @@ cmd_wait() {
 
         if [[ -n "$match" ]]; then
             local matched_line
-            matched_line="$(printf '%s\n' "$content" | grep -E "$match" | tail -1)" || true
+            matched_line="$(printf '%s\n' "$content" | grep -E -- "$match" | tail -1)" || true
             if [[ -n "$matched_line" ]]; then
                 mark_read "$target"
                 log_event ">" "$target" "wait" "--match matched=${elapsed}s"
@@ -543,8 +577,10 @@ cmd_spawn() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --cmd)       cmd="$2"; shift 2 ;;
-            --cwd)       cwd="$2"; shift 2 ;;
+            --cmd)       [[ $# -ge 2 ]] || die "--cmd requires an argument"
+                         cmd="$2"; shift 2 ;;
+            --cwd)       [[ $# -ge 2 ]] || die "--cwd requires an argument"
+                         cwd="$2"; shift 2 ;;
             --horizontal) direction="--right"; shift ;;
             *)           die "unknown flag '$1' for spawn" ;;
         esac
@@ -554,7 +590,7 @@ cmd_spawn() {
     [[ -n "$cwd" ]] && args+=(--cwd "$cwd")
     if [[ -n "$cmd" ]]; then
         args+=(--)
-        args+=($cmd)
+        args+=("$cmd")
     fi
 
     local new_pane_id
@@ -607,12 +643,13 @@ cmd_lock() {
         fi
     fi
 
+    # Read pane first to verify it exists before acquiring lock
+    wezterm cli get-text --pane-id "$target" --start-line -50 >/dev/null
+    mark_read "$target"
+
     local now
     now="$(date +%s)"
     printf '%s:%s:%s\n' "${WEZTERM_PANE:-?}" "$now" "$timeout_secs" > "$LOCK_DIR/$target"
-
-    wezterm cli get-text --pane-id "$target" --start-line -50 >/dev/null
-    mark_read "$target"
 
     log_event ">" "$target" "lock" "timeout=${timeout_secs}s"
     if [[ "$JSON_OUTPUT" == "true" ]]; then
