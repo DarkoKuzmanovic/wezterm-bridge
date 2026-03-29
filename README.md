@@ -71,6 +71,7 @@ The SKILL.md teaches agents the full protocol: pane discovery, read-guard discip
 | `unlock <target>` | Release pane lock |
 | `--json <command>` | JSON output for any command |
 | `doctor` | Run diagnostics. |
+| `run <name\|path> [VAR=val]` | Run a workflow file. `--check` validates. |
 
 ## How It Works
 

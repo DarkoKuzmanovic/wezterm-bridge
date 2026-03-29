@@ -52,6 +52,7 @@ wezterm-bridge message codex --enter 'Review src/auth.ts for security issues'
 | `unlock <target>` | Release pane lock. |
 | `--json <command>` | Any command with JSON output. |
 | `doctor` | Run diagnostics |
+| `run <name\|path> [VAR=val]` | Run a workflow file (.wb). `--check` validates without executing. |
 
 ## Target Resolution
 

@@ -206,6 +206,34 @@ Output format:
 
 ---
 
+## run <name|path> [VAR=value ...]
+
+Executes a workflow file (`.wb`) — a linear sequence of bridge commands with variable substitution.
+
+```
+wezterm-bridge run review                    # by name (searches .wezterm-bridge/workflows/ then ~/.wezterm-bridge/workflows/)
+wezterm-bridge run ./my-workflow.wb          # by path
+wezterm-bridge run review TARGET=claude      # override variable
+wezterm-bridge run --check review            # validate without executing
+```
+
+The last `read` step's output is the workflow result (printed to stdout). All other step output goes to stderr as progress.
+
+Workflow file format:
+
+```
+#! name: code-review
+#! var: TARGET=codex
+#! var: FILE=src/auth.ts
+
+read $TARGET 20
+message $TARGET --enter "Review $FILE"
+wait $TARGET --quiet 10
+read $TARGET --new
+```
+
+---
+
 ## doctor
 
 Runs diagnostics: checks wezterm, jq, environment, connectivity, labels, guards.
