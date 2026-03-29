@@ -4,6 +4,20 @@ set -euo pipefail
 VERSION="1.0.0"
 LABEL_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/labels"
 GUARD_PREFIX="/tmp/wezterm-bridge-${UID:-$(id -u)}/read"
+LOG_FILE="/tmp/wezterm-bridge-${UID:-$(id -u)}/bridge.log"
+
+log_event() {
+    local actor="${WEZTERM_PANE:-?}"
+    local direction="$1"
+    local target="$2"
+    local cmd="$3"
+    local summary="${4:-}"
+    ensure_dirs
+    local line
+    line="$(date -Iseconds) ${actor}${direction}${target} ${cmd}"
+    [[ -n "$summary" ]] && line+=" $summary"
+    printf '%s\n' "$line" >> "$LOG_FILE"
+}
 
 # --- Utilities ---
 
@@ -117,6 +131,7 @@ cmd_name() {
     done
     printf '%s\n' "$label" > "$LABEL_DIR/$target"
     echo "pane $target labeled '$label'"
+    log_event ">" "$target" "name" "$label"
 }
 
 cmd_resolve() {
@@ -133,6 +148,7 @@ cmd_type() {
     shift # consume target
     printf '%s' "$*" | wezterm cli send-text --pane-id "$target" --no-paste
     clear_read "$target"
+    log_event ">" "$target" "type" "$*"
 }
 
 cmd_keys() {
@@ -168,6 +184,7 @@ cmd_keys() {
     done
     printf "$seq" | wezterm cli send-text --pane-id "$target" --no-paste
     clear_read "$target"
+    log_event ">" "$target" "keys" "$*"
 }
 
 cmd_message() {
@@ -186,6 +203,7 @@ cmd_message() {
     local sender="${label:-pane:$pane_id}"
     printf '%s' "[wezterm-bridge from:${sender}] $*" | wezterm cli send-text --pane-id "$target" --no-paste
     clear_read "$target"
+    log_event ">" "$target" "message" ""
 }
 
 cmd_read() {
@@ -204,6 +222,7 @@ cmd_read() {
     local start_line="-${lines}"
     wezterm cli get-text --pane-id "$target" --start-line "$start_line"
     mark_read "$target"
+    log_event "<" "$target" "read" "$lines"
 }
 
 cmd_list() {
@@ -230,6 +249,27 @@ cmd_list() {
         fi
         printf "%-8s %-6s %-20s %-10s %s\n" "$pane_id" "$tab_id" "$title" "$label" "$cwd"
     done
+}
+
+cmd_log() {
+    ensure_dirs
+    if [[ "${1:-}" == "--clear" ]]; then
+        > "$LOG_FILE"
+        echo "log cleared"
+        return
+    fi
+    local tail_n=20
+    if [[ "${1:-}" == "--tail" ]]; then
+        tail_n="${2:-20}"
+        if [[ ! "$tail_n" =~ ^[0-9]+$ ]] || [[ "$tail_n" -eq 0 ]]; then
+            die "--tail requires a positive integer, got '$tail_n'"
+        fi
+    fi
+    if [[ -f "$LOG_FILE" ]] && [[ -s "$LOG_FILE" ]]; then
+        tail -n "$tail_n" "$LOG_FILE"
+    else
+        echo "(no log entries yet)"
+    fi
 }
 
 cmd_doctor() {
@@ -315,6 +355,7 @@ COMMANDS:
   name <target> <label>       Label a pane for easy reference
   resolve <label>             Show pane ID for a label
   id                          Print current pane ID ($WEZTERM_PANE)
+  log [--tail <n>] [--clear]      View or clear the audit log
   doctor                      Run diagnostics
 
 OPTIONS:
@@ -340,6 +381,7 @@ main() {
         name)       shift; cmd_name "$@" ;;
         resolve)    shift; cmd_resolve "$@" ;;
         id)         cmd_id ;;
+        log)        shift; cmd_log "$@" ;;
         doctor)     cmd_doctor ;;
         --version)  echo "wezterm-bridge $VERSION" ;;
         help|--help) show_help ;;
