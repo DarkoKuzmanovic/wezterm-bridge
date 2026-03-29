@@ -5,6 +5,7 @@ VERSION="1.0.0"
 LABEL_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/labels"
 GUARD_PREFIX="/tmp/wezterm-bridge-${UID:-$(id -u)}/read"
 LOG_FILE="/tmp/wezterm-bridge-${UID:-$(id -u)}/bridge.log"
+CURSOR_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/cursors"
 JSON_OUTPUT=false
 
 json_ok() {
@@ -73,10 +74,56 @@ ensure_dirs() {
         chmod 700 "$base"
     fi
     [[ -d "$LABEL_DIR" ]] || mkdir -p "$LABEL_DIR"
+    [[ -d "$CURSOR_DIR" ]] || mkdir -p "$CURSOR_DIR"
 }
 
 ensure_label_dir() {
     ensure_dirs
+}
+
+save_cursor() {
+    local pane_id="$1" content="$2"
+    mkdir -p "$CURSOR_DIR"
+    local line_count
+    line_count="$(printf '%s\n' "$content" | wc -l | tr -d ' ')"
+    local last_line_hash
+    last_line_hash="$(printf '%s\n' "$content" | tail -1 | cksum | cut -d' ' -f1)"
+    printf '%s:%s\n' "$line_count" "$last_line_hash" > "$CURSOR_DIR/$pane_id"
+}
+
+read_since_cursor() {
+    local pane_id="$1" content="$2"
+    local cursor_file="$CURSOR_DIR/$pane_id"
+    if [[ ! -f "$cursor_file" ]]; then
+        printf '%s\n' "$content"
+        return
+    fi
+    local saved_count saved_hash
+    IFS=: read -r saved_count saved_hash < "$cursor_file"
+
+    local total_lines
+    total_lines="$(printf '%s\n' "$content" | wc -l | tr -d ' ')"
+
+    if (( saved_count > total_lines )); then
+        printf '%s\n' "$content"
+        return
+    fi
+
+    local line_at_cursor
+    line_at_cursor="$(printf '%s\n' "$content" | sed -n "${saved_count}p")"
+    local current_hash
+    current_hash="$(printf '%s' "$line_at_cursor" | cksum | cut -d' ' -f1)"
+
+    if [[ "$current_hash" == "$saved_hash" ]]; then
+        if (( saved_count < total_lines )); then
+            printf '%s\n' "$content" | tail -n +"$(( saved_count + 1 ))"
+        else
+            echo "(no new output)"
+        fi
+    else
+        echo "[cursor mismatch — showing all content]"
+        printf '%s\n' "$content"
+    fi
 }
 
 # --- Read Guard ---
@@ -259,26 +306,50 @@ cmd_read() {
     require_wezterm
     local target
     target="$(resolve_target "$1")"
-    local lines="${2:-50}"
+    shift
 
-    # Validate lines is a positive integer
-    if [[ ! "$lines" =~ ^[0-9]+$ ]] || [[ "$lines" -eq 0 ]]; then
-        die "lines must be a positive integer, got '$lines'"
+    local new_mode=false
+    local lines=50
+
+    if [[ "${1:-}" == "--new" ]]; then
+        new_mode=true
+    elif [[ -n "${1:-}" ]]; then
+        lines="$1"
+        if [[ ! "$lines" =~ ^[0-9]+$ ]] || [[ "$lines" -eq 0 ]]; then
+            die "lines must be a positive integer, got '$lines'"
+        fi
     fi
 
-    # Negative start-line = scrollback offset
-    local start_line="-${lines}"
     local content
-    content="$(wezterm cli get-text --pane-id "$target" --start-line "$start_line")"
-    mark_read "$target"
-    log_event "<" "$target" "read" "$lines"
-    if [[ "$JSON_OUTPUT" == "true" ]]; then
-        local encoded
-        encoded="$(printf '%s' "$content" | jq -Rs '.')"
-        printf '{"status":"ok","command":"read","pane_id":"%s","lines":%s,"content":%s}\n' \
-            "$target" "$lines" "$encoded"
+    if $new_mode; then
+        content="$(wezterm cli get-text --pane-id "$target" --start-line -500)"
+        local new_content
+        new_content="$(read_since_cursor "$target" "$content")"
+        save_cursor "$target" "$content"
+        mark_read "$target"
+        log_event "<" "$target" "read" "--new"
+        if [[ "$JSON_OUTPUT" == "true" ]]; then
+            local encoded
+            encoded="$(printf '%s' "$new_content" | jq -Rs '.')"
+            printf '{"status":"ok","command":"read","pane_id":"%s","mode":"new","content":%s}\n' \
+                "$target" "$encoded"
+        else
+            printf '%s\n' "$new_content"
+        fi
     else
-        printf '%s\n' "$content"
+        local start_line="-${lines}"
+        content="$(wezterm cli get-text --pane-id "$target" --start-line "$start_line")"
+        save_cursor "$target" "$content"
+        mark_read "$target"
+        log_event "<" "$target" "read" "$lines"
+        if [[ "$JSON_OUTPUT" == "true" ]]; then
+            local encoded
+            encoded="$(printf '%s' "$content" | jq -Rs '.')"
+            printf '{"status":"ok","command":"read","pane_id":"%s","lines":%s,"content":%s}\n' \
+                "$target" "$lines" "$encoded"
+        else
+            printf '%s\n' "$content"
+        fi
     fi
 }
 
