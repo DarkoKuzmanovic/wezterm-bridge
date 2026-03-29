@@ -409,6 +409,149 @@ resolve_workflow() {
     die "workflow '$name' not found. Searched: ./$project_path, $global_path"
 }
 
+# --- Workflow Runner ---
+
+_wf_valid_commands=(list read type keys message name resolve id spawn lock unlock wait log doctor)
+
+cmd_run() {
+    local check_only=false
+    if [[ "${1:-}" == "--check" ]]; then
+        check_only=true
+        shift
+    fi
+
+    [[ $# -ge 1 ]] || die "'run' requires a workflow name or path. Run: wezterm-bridge help"
+
+    local wf_path
+    wf_path="$(resolve_workflow "$1")"
+    shift
+
+    # Parse the workflow file
+    parse_workflow "$wf_path"
+
+    # Apply CLI variable overrides
+    for arg in "$@"; do
+        if [[ "$arg" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            local oname="${BASH_REMATCH[1]}"
+            local oval="${BASH_REMATCH[2]}"
+            if [[ ! -v "WF_VARS[$oname]" ]]; then
+                die "unknown variable override '$oname' (not declared in workflow)"
+            fi
+            WF_VARS["$oname"]="$oval"
+        else
+            die "invalid argument '$arg' (expected VAR=value)"
+        fi
+    done
+
+    local total=${#WF_BODY[@]}
+    local wf_label="${WF_NAME:-$(basename "$wf_path" .wb)}"
+
+    if $check_only; then
+        _wf_check "$wf_label" "$total"
+        return
+    fi
+
+    # Execute steps
+    local last_read_output=""
+    local step=0
+
+    for body_line in "${WF_BODY[@]}"; do
+        (( step++, 1 ))
+        tokenize_line "$body_line" wf_var_lookup
+        local command="${TOKENS[0]}"
+        local args=("${TOKENS[@]:1}")
+
+        # Validate command
+        local valid=false
+        for vc in "${_wf_valid_commands[@]}"; do
+            [[ "$vc" == "$command" ]] && valid=true && break
+        done
+        $valid || die "unknown command '$command' in workflow '$wf_label' (step $step/$total)"
+
+        # Log step progress to stderr
+        echo "[workflow:$wf_label] step $step/$total: $body_line" >&2
+
+        # Execute in subshell, capture output
+        local step_output
+        if ! step_output="$(cmd_"$command" "${args[@]}" 2>&1)"; then
+            if [[ "$JSON_OUTPUT" == "true" ]]; then
+                local emsg
+                emsg="$(json_escape "step $step/$total failed: $body_line: $step_output")"
+                printf '{"status":"error","command":"run","workflow":"%s","failed_step":%d,"total_steps":%d,"message":"%s"}\n' \
+                    "$wf_label" "$step" "$total" "$emsg"
+                exit 1
+            else
+                echo "[workflow:$wf_label] step $step/$total failed: $body_line" >&2
+                echo "$step_output" >&2
+                exit 1
+            fi
+        fi
+
+        # Capture last read output
+        if [[ "$command" == "read" ]]; then
+            last_read_output="$step_output"
+        fi
+
+        # Non-read output goes to stderr as progress
+        if [[ "$command" != "read" && -n "$step_output" ]]; then
+            echo "$step_output" >&2
+        fi
+    done
+
+    # Print workflow result
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        local encoded_result
+        encoded_result="$(json_escape "$last_read_output")"
+        printf '{"status":"ok","command":"run","workflow":"%s","steps":%d,"result":"%s"}\n' \
+            "$wf_label" "$total" "$encoded_result"
+    elif [[ -n "$last_read_output" ]]; then
+        printf '%s\n' "$last_read_output"
+    fi
+}
+
+_wf_check() {
+    local wf_label="$1"
+    local total="$2"
+    local step=0
+    local -A check_labels=()
+
+    # Pre-populate with existing labels
+    if [[ -d "$LABEL_DIR" ]]; then
+        for lfile in "$LABEL_DIR"/*; do
+            [[ -f "$lfile" ]] || continue
+            local lname
+            lname="$(cat "$lfile")"
+            check_labels["$lname"]=1
+        done
+    fi
+
+    for body_line in "${WF_BODY[@]}"; do
+        (( step++, 1 ))
+        tokenize_line "$body_line" wf_var_lookup
+        local command="${TOKENS[0]}"
+
+        # Validate command name
+        local valid=false
+        for vc in "${_wf_valid_commands[@]}"; do
+            [[ "$vc" == "$command" ]] && valid=true && break
+        done
+        $valid || die "unknown command '$command' in workflow '$wf_label' (step $step/$total)"
+
+        # Track labels from spawn and name
+        if [[ "$command" == "spawn" ]]; then
+            check_labels["${TOKENS[1]}"]=1
+        elif [[ "$command" == "name" ]] && [[ ${#TOKENS[@]} -ge 3 ]]; then
+            check_labels["${TOKENS[2]}"]=1
+        fi
+    done
+
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        json_ok "run" "workflow=$wf_label" "mode=check" "steps=$total"
+    else
+        echo "workflow '$wf_label' is valid ($total steps)" >&2
+    fi
+}
+
 # --- Commands ---
 
 cmd_id() {
@@ -1016,6 +1159,8 @@ COMMANDS:
   unlock <target>                 Release pane lock
   log [--tail <n>] [--clear]      View or clear the audit log
   doctor                      Run diagnostics
+  run <name|path> [VAR=val]   Run a workflow file (.wb)
+                                  --check           Validate without executing
 
 OPTIONS:
   --json                      Output results as JSON objects
@@ -1051,6 +1196,7 @@ main() {
         doctor)     cmd_doctor ;;
         wait)       shift; cmd_wait "$@" ;;
         log)        shift; cmd_log "$@" ;;
+        run)        shift; cmd_run "$@" ;;
         --version)  if [[ "$JSON_OUTPUT" == "true" ]]; then
                         json_ok "version" "version=$VERSION"
                     else
