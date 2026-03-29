@@ -46,6 +46,13 @@ wezterm-bridge keys codex Enter       # submit
 | `name <target> <label>` | Label a pane (e.g., `name 3 codex`) |
 | `resolve <label>` | Get pane ID for a label |
 | `id` | Print your own pane ID |
+| `wait <target> <condition>` | Block until pane matches condition. Requires --match, --quiet, or --prompt. |
+| `read <target> --new` | Only new output since last read (cursor-based). |
+| `spawn <label> [--cmd ...] [--cwd ...] [--horizontal]` | Split pane, start command, label it. |
+| `log [--tail <n>] [--clear]` | View or clear the audit log. |
+| `lock <target> [--timeout <s>]` | Acquire pane lock (default 30s expiry). |
+| `unlock <target>` | Release pane lock. |
+| `--json <command>` | Any command with JSON output. |
 | `doctor` | Run diagnostics |
 
 ## Target Resolution
@@ -93,4 +100,48 @@ wezterm-bridge read <sender_pane_or_label>
 wezterm-bridge message <sender_pane_or_label> 'Your reply'
 wezterm-bridge read <sender_pane_or_label>
 wezterm-bridge keys <sender_pane_or_label> Enter
+```
+
+## Orchestration
+
+### Waiting for Results
+
+After sending a task to another agent, use `wait` instead of polling:
+
+```bash
+wezterm-bridge message codex 'Review src/auth.ts'
+wezterm-bridge read codex 5
+wezterm-bridge keys codex Enter
+# Wait for Codex to finish (output settles for 10 seconds)
+wezterm-bridge wait codex --quiet 10 --timeout 300
+# Now read the result
+wezterm-bridge read codex --new
+```
+
+### Incremental Reads
+
+Use `read --new` to get only output since your last read:
+
+```bash
+wezterm-bridge read codex 50         # first read — sets cursor
+# ... Codex produces output ...
+wezterm-bridge read codex --new      # only the new lines
+```
+
+### Spawning Agent Panes
+
+```bash
+wezterm-bridge spawn codex --cmd codex --cwd ~/project --horizontal
+# Codex is now running in a labeled pane, ready for messages
+```
+
+### Pane Locking
+
+When multiple agents might write to the same pane:
+
+```bash
+wezterm-bridge lock shared-shell --timeout 60
+wezterm-bridge type shared-shell 'npm test'
+wezterm-bridge keys shared-shell Enter
+wezterm-bridge unlock shared-shell
 ```

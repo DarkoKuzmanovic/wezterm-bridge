@@ -65,6 +65,13 @@ The SKILL.md teaches agents the full protocol: pane discovery, read-guard discip
 | `name <target> <label>` | Label a pane for easy reference. |
 | `resolve <label>` | Get pane ID for a label. |
 | `id` | Print current pane ID. |
+| `wait <target> <condition>` | Block until pane content matches (--match, --quiet, --prompt) |
+| `read <target> --new` | Only new output since last read |
+| `spawn <label> [options]` | Split pane + start command + label |
+| `log [--tail] [--clear]` | View/clear the audit log |
+| `lock <target>` | Acquire pane lock (auto-expires) |
+| `unlock <target>` | Release pane lock |
+| `--json <command>` | JSON output for any command |
 | `doctor` | Run diagnostics. |
 
 ## How It Works
@@ -76,7 +83,7 @@ The bridge wraps three WezTerm CLI primitives:
 
 A **read-guard** system (temp files in `/tmp/`) enforces a read-before-write discipline, preventing agents from blindly firing commands.
 
-Pane **labels** are stored in `/tmp/wezterm-bridge-labels/` so agents can refer to each other by name instead of numeric IDs.
+Pane **labels** are stored in `/tmp/wezterm-bridge-$UID/labels/` so agents can refer to each other by name instead of numeric IDs.
 
 ## Uninstall
 

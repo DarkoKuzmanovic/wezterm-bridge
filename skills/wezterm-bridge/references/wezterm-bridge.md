@@ -70,7 +70,7 @@ The target sees:
 
 ## name <target> <label>
 
-Labels a pane for easy reference. Labels are stored in `/tmp/wezterm-bridge-labels/`.
+Labels a pane for easy reference. Labels are stored in `/tmp/wezterm-bridge-$UID/labels/`.
 
 ```
 wezterm-bridge name 3 codex
@@ -94,6 +94,110 @@ Prints the current pane's ID from `$WEZTERM_PANE`.
 
 ```
 wezterm-bridge id    # prints: 5
+```
+
+---
+
+## wait <target> <condition>
+
+Blocks until the target pane's content matches a condition. Polls every `--interval` seconds.
+
+Conditions (exactly one required):
+- `--match <regex>` — wait for a line matching the extended regex
+- `--quiet <secs>` — wait for output to stop changing for N seconds
+- `--prompt` — shortcut for `--match '^[›$%#>] ?$'`
+
+Options:
+- `--timeout <secs>` — max wait time (default: 120)
+- `--interval <secs>` — poll interval (default: 2)
+
+On success: prints the matched line (for --match/--prompt) or a status message, sets read guard, exits 0.
+On timeout: exits 1.
+
+```
+wezterm-bridge wait codex --match "PASS" --timeout 60
+wezterm-bridge wait codex --quiet 10
+wezterm-bridge wait codex --prompt
+```
+
+---
+
+## read <target> --new
+
+Returns only output that appeared since the last `read` of this target.
+
+Uses a cursor system: after each read, a cursor (line count + hash) is saved. On `--new`, only lines after the cursor are returned. If the cursor can't be matched (scrollback wrapped), all content is returned with a warning.
+
+```
+wezterm-bridge read codex --new
+```
+
+---
+
+## spawn <label> [options]
+
+Splits the current pane, starts a command, and labels the new pane.
+
+Options:
+- `--cmd <command>` — command to run (default: `$SHELL`)
+- `--cwd <dir>` — working directory
+- `--horizontal` — side-by-side split (default: top/bottom)
+
+```
+wezterm-bridge spawn codex --cmd codex --cwd ~/project --horizontal
+wezterm-bridge spawn worker --cmd 'npm run dev'
+```
+
+---
+
+## log [--tail <n>] [--clear]
+
+View or clear the audit log. All bridge operations are logged automatically.
+
+```
+wezterm-bridge log                   # last 20 entries
+wezterm-bridge log --tail 50         # last 50 entries
+wezterm-bridge log --clear           # clear log
+```
+
+---
+
+## lock <target> [--timeout <secs>]
+
+Acquires an advisory lock on a pane. Write commands (`type`, `keys`, `message`) check locks before executing. Locks auto-expire after the timeout.
+
+Default timeout: 30 seconds.
+
+```
+wezterm-bridge lock codex --timeout 60
+```
+
+---
+
+## unlock <target>
+
+Releases a lock you own on a pane. Idempotent if pane is not locked.
+
+```
+wezterm-bridge unlock codex
+```
+
+---
+
+## --json (global flag)
+
+Prefix any command with `--json` to get machine-readable JSON output.
+
+```
+wezterm-bridge --json list
+wezterm-bridge --json read codex 10
+wezterm-bridge --json wait codex --match "done"
+```
+
+Output format:
+```json
+{"status":"ok","command":"...","key":"value"}
+{"status":"error","message":"..."}
 ```
 
 ---
