@@ -6,6 +6,7 @@ LABEL_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/labels"
 GUARD_PREFIX="/tmp/wezterm-bridge-${UID:-$(id -u)}/read"
 LOG_FILE="/tmp/wezterm-bridge-${UID:-$(id -u)}/bridge.log"
 CURSOR_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/cursors"
+LOCK_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/locks"
 JSON_OUTPUT=false
 
 json_ok() {
@@ -75,6 +76,7 @@ ensure_dirs() {
     fi
     [[ -d "$LABEL_DIR" ]] || mkdir -p "$LABEL_DIR"
     [[ -d "$CURSOR_DIR" ]] || mkdir -p "$CURSOR_DIR"
+    [[ -d "$LOCK_DIR" ]] || mkdir -p "$LOCK_DIR"
 }
 
 ensure_label_dir() {
@@ -123,6 +125,25 @@ read_since_cursor() {
     else
         echo "[cursor mismatch — showing all content]"
         printf '%s\n' "$content"
+    fi
+}
+
+check_lock() {
+    local target="$1"
+    local lock_file="$LOCK_DIR/$target"
+    if [[ -f "$lock_file" ]]; then
+        local owner ts timeout_secs
+        IFS=: read -r owner ts timeout_secs < "$lock_file"
+        local now
+        now="$(date +%s)"
+        local expires=$(( ts + timeout_secs ))
+        if (( now < expires )) && [[ "$owner" != "${WEZTERM_PANE:-}" ]]; then
+            local remaining=$(( expires - now ))
+            die "pane $target locked by pane $owner (expires in ${remaining}s)"
+        fi
+        if (( now >= expires )); then
+            rm -f "$lock_file"
+        fi
     fi
 }
 
@@ -230,6 +251,7 @@ cmd_type() {
     local target
     target="$(resolve_target "$1")"
     require_read "$target"
+    check_lock "$target"
     require_wezterm
     shift # consume target
     printf '%s' "$*" | wezterm cli send-text --pane-id "$target" --no-paste
@@ -245,6 +267,7 @@ cmd_keys() {
     local target
     target="$(resolve_target "$1")"
     require_read "$target"
+    check_lock "$target"
     shift # consume target
     require_wezterm
     local seq=""
@@ -284,6 +307,7 @@ cmd_message() {
     local target
     target="$(resolve_target "$1")"
     require_read "$target"
+    check_lock "$target"
     require_wezterm
     shift # consume target
     local pane_id="${WEZTERM_PANE:-unknown}"
@@ -550,6 +574,87 @@ cmd_spawn() {
     fi
 }
 
+cmd_lock() {
+    require_args 1 $# "lock"
+    require_wezterm
+    local target
+    target="$(resolve_target "$1")"
+    local timeout_secs=30
+
+    if [[ "${2:-}" == "--timeout" ]]; then
+        timeout_secs="${3:-30}"
+        if [[ ! "$timeout_secs" =~ ^[0-9]+$ ]] || [[ "$timeout_secs" -eq 0 ]]; then
+            die "timeout must be a positive integer, got '$timeout_secs'"
+        fi
+    fi
+
+    mkdir -p "$LOCK_DIR"
+
+    if [[ -f "$LOCK_DIR/$target" ]]; then
+        local owner ts existing_timeout
+        IFS=: read -r owner ts existing_timeout < "$LOCK_DIR/$target"
+        local now
+        now="$(date +%s)"
+        local expires=$(( ts + existing_timeout ))
+        if (( now < expires )) && [[ "$owner" != "${WEZTERM_PANE:-}" ]]; then
+            local remaining=$(( expires - now ))
+            die "pane $target already locked by pane $owner (expires in ${remaining}s)"
+        fi
+    fi
+
+    local now
+    now="$(date +%s)"
+    printf '%s:%s:%s\n' "${WEZTERM_PANE:-?}" "$now" "$timeout_secs" > "$LOCK_DIR/$target"
+
+    wezterm cli get-text --pane-id "$target" --start-line -50 >/dev/null
+    mark_read "$target"
+
+    log_event ">" "$target" "lock" "timeout=${timeout_secs}s"
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        json_ok "lock" "pane_id=$target" "timeout=$timeout_secs"
+    else
+        echo "locked pane $target (expires in ${timeout_secs}s)"
+    fi
+}
+
+cmd_unlock() {
+    require_args 1 $# "unlock"
+    local target
+    target="$(resolve_target "$1")"
+
+    mkdir -p "$LOCK_DIR"
+    local lock_file="$LOCK_DIR/$target"
+
+    if [[ ! -f "$lock_file" ]]; then
+        if [[ "$JSON_OUTPUT" == "true" ]]; then
+            json_ok "unlock" "pane_id=$target" "was_locked=false"
+        else
+            echo "pane $target not locked"
+        fi
+        return
+    fi
+
+    local owner ts timeout_secs
+    IFS=: read -r owner ts timeout_secs < "$lock_file"
+
+    if [[ "$owner" != "${WEZTERM_PANE:-}" ]]; then
+        local now
+        now="$(date +%s)"
+        local expires=$(( ts + timeout_secs ))
+        if (( now < expires )); then
+            die "pane $target locked by pane $owner, cannot unlock"
+        fi
+    fi
+
+    rm -f "$lock_file"
+    log_event ">" "$target" "unlock" ""
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        json_ok "unlock" "pane_id=$target" "was_locked=true"
+    else
+        echo "unlocked pane $target"
+    fi
+}
+
 cmd_doctor() {
     local ok=true
 
@@ -643,6 +748,8 @@ COMMANDS:
                                   --cmd <command>   Command to run (default: $SHELL)
                                   --cwd <dir>       Working directory
                                   --horizontal      Side-by-side split
+  lock <target> [--timeout <s>]   Acquire pane lock (default: 30s expiry)
+  unlock <target>                 Release pane lock
   log [--tail <n>] [--clear]      View or clear the audit log
   doctor                      Run diagnostics
 
@@ -675,6 +782,8 @@ main() {
         resolve)    shift; cmd_resolve "$@" ;;
         id)         cmd_id ;;
         spawn)      shift; cmd_spawn "$@" ;;
+        lock)       shift; cmd_lock "$@" ;;
+        unlock)     shift; cmd_unlock "$@" ;;
         doctor)     cmd_doctor ;;
         wait)       shift; cmd_wait "$@" ;;
         log)        shift; cmd_log "$@" ;;
