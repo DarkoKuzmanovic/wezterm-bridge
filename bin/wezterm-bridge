@@ -127,7 +127,7 @@ cmd_keys() {
     local seq=""
     for key in "$@"; do
         case "$key" in
-            Enter)   seq+='\n' ;;
+            Enter)   seq+='\r' ;;
             Escape)  seq+='\x1b' ;;
             Tab)     seq+='\t' ;;
             C-c)     seq+='\x03' ;;
