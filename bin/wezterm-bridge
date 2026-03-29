@@ -396,24 +396,22 @@ cmd_list() {
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         local raw_json
         raw_json="$(wezterm cli list --format json)"
-        # Inject labels into each pane entry
-        local enriched
-        enriched="$(printf '%s' "$raw_json" | jq -c '[.[] | {pane_id: .pane_id, tab_id: .tab_id, title: .title, cwd: .cwd}]')"
-        # Add labels
-        local result="["
+        # Build a label map as JSON object: {"pane_id": "label", ...}
+        local label_json="{"
         local first=true
-        printf '%s' "$raw_json" | jq -r '.[] | "\(.pane_id)\t\(.tab_id)\t\(.title)\t\(.cwd)"' | \
-        while IFS=$'\t' read -r pane_id tab_id title cwd; do
-            local label=""
-            if [[ -f "$LABEL_DIR/$pane_id" ]]; then
-                label="$(cat "$LABEL_DIR/$pane_id")"
-            fi
-            cwd="${cwd/#$HOME/~}"
-            if $first; then first=false; else printf ','; fi
-            printf '{"pane_id":"%s","tab_id":"%s","title":"%s","label":"%s","cwd":"%s"}' \
-                "$pane_id" "$tab_id" "$(json_escape "$title")" "$(json_escape "$label")" "$(json_escape "$cwd")"
+        local f
+        for f in "$LABEL_DIR"/*; do
+            [[ -f "$f" ]] || continue
+            local pid label_val
+            pid="$(basename "$f")"
+            label_val="$(cat "$f")"
+            if $first; then first=false; else label_json+=","; fi
+            label_json+="\"$pid\":\"$(json_escape "$label_val")\""
         done
-        printf ']\n'
+        label_json+="}"
+        # Use jq to merge labels into the pane list (all escaping handled by jq)
+        printf '%s' "$raw_json" | jq -c --argjson labels "$label_json" \
+            '[.[] | {pane_id: .pane_id, tab_id: .tab_id, title: .title, label: ($labels[(.pane_id | tostring)] // ""), cwd: .cwd}]'
         return
     fi
 
@@ -590,7 +588,7 @@ cmd_spawn() {
     [[ -n "$cwd" ]] && args+=(--cwd "$cwd")
     if [[ -n "$cmd" ]]; then
         args+=(--)
-        args+=("$cmd")
+        args+=("${SHELL:-/bin/sh}" "-lc" "$cmd")
     fi
 
     local new_pane_id
@@ -623,7 +621,8 @@ cmd_lock() {
     local timeout_secs=30
 
     if [[ "${2:-}" == "--timeout" ]]; then
-        timeout_secs="${3:-30}"
+        [[ -n "${3:-}" ]] || die "--timeout requires an argument"
+        timeout_secs="$3"
         if [[ ! "$timeout_secs" =~ ^[0-9]+$ ]] || [[ "$timeout_secs" -eq 0 ]]; then
             die "timeout must be a positive integer, got '$timeout_secs'"
         fi
