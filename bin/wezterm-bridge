@@ -264,7 +264,16 @@ cmd_type() {
     check_lock "$target"
     require_wezterm
     shift # consume target
+    local enter=false
+    if [[ "${1:-}" == "--enter" ]]; then
+        enter=true
+        shift
+    fi
+    [[ $# -eq 0 ]] && die "type requires text argument"
     printf '%s' "$*" | wezterm cli send-text --pane-id "$target" --no-paste
+    if [[ "$enter" == "true" ]]; then
+        printf '\r' | wezterm cli send-text --pane-id "$target" --no-paste
+    fi
     clear_read "$target"
     log_event ">" "$target" "type" "$*"
     if [[ "$JSON_OUTPUT" == "true" ]]; then
@@ -320,6 +329,12 @@ cmd_message() {
     check_lock "$target"
     require_wezterm
     shift # consume target
+    local enter=false
+    if [[ "${1:-}" == "--enter" ]]; then
+        enter=true
+        shift
+    fi
+    [[ $# -eq 0 ]] && die "message requires text argument"
     local pane_id="${WEZTERM_PANE:-unknown}"
     local label=""
     ensure_label_dir
@@ -328,6 +343,9 @@ cmd_message() {
     fi
     local sender="${label:-pane:$pane_id}"
     printf '%s' "[wezterm-bridge from:${sender}] $*" | wezterm cli send-text --pane-id "$target" --no-paste
+    if [[ "$enter" == "true" ]]; then
+        printf '\r' | wezterm cli send-text --pane-id "$target" --no-paste
+    fi
     clear_read "$target"
     log_event ">" "$target" "message" ""
     if [[ "$JSON_OUTPUT" == "true" ]]; then

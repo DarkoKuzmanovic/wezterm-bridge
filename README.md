@@ -37,11 +37,9 @@ wezterm-bridge name "$(wezterm-bridge id)" codex
 Now either agent can communicate:
 
 ```bash
-wezterm-bridge list                              # see all panes
-wezterm-bridge read codex 20                     # read pane (required before write)
-wezterm-bridge message codex 'Review auth.ts'    # send message
-wezterm-bridge read codex 20                     # verify text landed
-wezterm-bridge keys codex Enter                  # submit
+wezterm-bridge list                                      # see all panes
+wezterm-bridge read codex 20                             # read pane (required before write)
+wezterm-bridge message codex --enter 'Review auth.ts'    # send and submit
 ```
 
 ## Agent Integration
@@ -59,9 +57,9 @@ The SKILL.md teaches agents the full protocol: pane discovery, read-guard discip
 |---------|-------------|
 | `list` | Show all panes with IDs, titles, labels |
 | `read <target> [lines]` | Read pane content (default 50). Sets read guard. |
-| `type <target> <text>` | Send text (no Enter). Requires read guard. |
+| `type <target> [--enter] <text>` | Send text. `--enter` submits it. Requires read guard. |
 | `keys <target> <key>...` | Send special keys (Enter, Escape, C-c, etc). |
-| `message <target> <text>` | Send prefixed agent-to-agent message. |
+| `message <target> [--enter] <text>` | Send prefixed agent-to-agent message. `--enter` submits it. |
 | `name <target> <label>` | Label a pane for easy reference. |
 | `resolve <label>` | Get pane ID for a label. |
 | `id` | Print current pane ID. |

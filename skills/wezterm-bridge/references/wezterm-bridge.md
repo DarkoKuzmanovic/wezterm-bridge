@@ -24,13 +24,15 @@ wezterm-bridge read codex      # last 50 lines from pane labeled "codex"
 
 ---
 
-## type <target> <text>
+## type <target> [--enter] <text>
 
-Sends literal text to the target pane. Does NOT send Enter — use `keys` for that.
+Sends literal text to the target pane. Use `--enter` to submit (press Enter) after typing.
+Without `--enter`, no Enter is sent — use `keys` for that separately.
 Requires a prior `read` of the target (read guard). Clears the guard after execution.
 
 ```
-wezterm-bridge type codex 'ls -la'
+wezterm-bridge type codex 'ls -la'              # type without Enter
+wezterm-bridge type codex --enter 'ls -la'      # type and submit
 ```
 
 ---
@@ -50,15 +52,17 @@ C-a, C-e, C-u, C-k, C-w, Up, Down, Left, Right
 
 ---
 
-## message <target> <text>
+## message <target> [--enter] <text>
 
 Sends a prefixed message for agent-to-agent communication. The message is
 automatically prefixed with `[wezterm-bridge from:<your_label>]`.
+Use `--enter` to submit the message immediately.
 
 Requires prior `read`. Clears guard.
 
 ```
-wezterm-bridge message codex 'Please review src/auth.ts'
+wezterm-bridge message codex 'Please review src/auth.ts'            # type only
+wezterm-bridge message codex --enter 'Please review src/auth.ts'    # type and submit
 ```
 
 The target sees:

@@ -25,11 +25,9 @@ wezterm-bridge name "$(wezterm-bridge id)" claude
 # 2. Discover panes
 wezterm-bridge list
 
-# 3. Send a message (read-act-read cycle)
+# 3. Send a message and submit it
 wezterm-bridge read codex 20          # satisfy guard
-wezterm-bridge message codex 'Review src/auth.ts for security issues'
-wezterm-bridge read codex 20          # verify text landed
-wezterm-bridge keys codex Enter       # submit
+wezterm-bridge message codex --enter 'Review src/auth.ts for security issues'
 
 # STOP. Do NOT poll. The reply arrives in YOUR pane.
 ```
@@ -40,9 +38,9 @@ wezterm-bridge keys codex Enter       # submit
 |---------|-------------|
 | `list` | Show all panes with IDs, titles, labels, cwd |
 | `read <target> [lines]` | Read pane content (default 50 lines). Satisfies read guard. |
-| `type <target> <text>` | Send text without Enter. Requires prior read. |
+| `type <target> [--enter] <text>` | Send text to pane. `--enter` submits it. Requires prior read. |
 | `keys <target> <key>...` | Send special keys. Requires prior read. |
-| `message <target> <text>` | Send prefixed agent message. Requires prior read. |
+| `message <target> [--enter] <text>` | Send prefixed agent message. `--enter` submits it. Requires prior read. |
 | `name <target> <label>` | Label a pane (e.g., `name 3 codex`) |
 | `resolve <label>` | Get pane ID for a label |
 | `id` | Print your own pane ID |
@@ -97,9 +95,7 @@ Messages arrive as:
 When you see this in your pane, reply back using:
 ```bash
 wezterm-bridge read <sender_pane_or_label>
-wezterm-bridge message <sender_pane_or_label> 'Your reply'
-wezterm-bridge read <sender_pane_or_label>
-wezterm-bridge keys <sender_pane_or_label> Enter
+wezterm-bridge message <sender_pane_or_label> --enter 'Your reply'
 ```
 
 ## Orchestration
@@ -109,9 +105,7 @@ wezterm-bridge keys <sender_pane_or_label> Enter
 After sending a task to another agent, use `wait` instead of polling:
 
 ```bash
-wezterm-bridge message codex 'Review src/auth.ts'
-wezterm-bridge read codex 5
-wezterm-bridge keys codex Enter
+wezterm-bridge message codex --enter 'Review src/auth.ts'
 # Wait for Codex to finish (output settles for 10 seconds)
 wezterm-bridge wait codex --quiet 10 --timeout 300
 # Now read the result

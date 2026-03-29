@@ -63,6 +63,31 @@ else
     (( PASS += 1 ))
 fi
 
+# Test: type --enter without text fails
+echo "Test: type --enter without text fails"
+touch "${GUARD_PREFIX}-42"
+assert_fails "type --enter no text" bash "$BRIDGE" type 42 --enter
+
+# Test: message --enter without text fails
+echo "Test: message --enter without text fails"
+touch "${GUARD_PREFIX}-42"
+assert_fails "message --enter no text" env WEZTERM_PANE=1 bash "$BRIDGE" message 42 --enter
+
+# Test: type --enter with text passes guard check
+echo "Test: type --enter with text passes guard check"
+touch "${GUARD_PREFIX}-42"
+output="$(bash "$BRIDGE" type 42 --enter "hello" 2>&1 || true)"
+if [[ "$output" == *"requires text argument"* ]]; then
+    echo "  FAIL: text validation rejected valid input"
+    (( FAIL += 1 ))
+elif [[ "$output" == *"must read pane"* ]]; then
+    echo "  FAIL: guard check still blocking"
+    (( FAIL += 1 ))
+else
+    echo "  PASS: --enter with text passes validation (wezterm error expected)"
+    (( PASS += 1 ))
+fi
+
 cleanup
 
 echo ""
