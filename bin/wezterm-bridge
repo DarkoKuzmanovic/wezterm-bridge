@@ -329,6 +329,112 @@ cmd_log() {
     fi
 }
 
+cmd_wait() {
+    require_args 1 $# "wait"
+    require_wezterm
+    local target
+    target="$(resolve_target "$1")"
+    shift
+
+    local match="" quiet="" prompt=false
+    local timeout=120 interval=2
+    local conditions=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --match)   match="$2"; (( conditions += 1 )); shift 2 ;;
+            --quiet)   quiet="$2"; (( conditions += 1 )); shift 2 ;;
+            --prompt)  prompt=true; (( conditions += 1 )); shift ;;
+            --timeout) timeout="$2"; shift 2 ;;
+            --interval) interval="$2"; shift 2 ;;
+            *)         die "unknown flag '$1' for wait" ;;
+        esac
+    done
+
+    if (( conditions == 0 )); then
+        die "wait requires one of: --match <regex>, --quiet <secs>, --prompt"
+    fi
+    if (( conditions > 1 )); then
+        die "wait accepts only one condition (got $conditions)"
+    fi
+
+    # Validate numeric args
+    if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
+        die "timeout must be a positive integer, got '$timeout'"
+    fi
+    if [[ ! "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -eq 0 ]]; then
+        die "interval must be a positive integer, got '$interval'"
+    fi
+
+    if $prompt; then
+        match='^[›$%#>] ?$'
+    fi
+
+    if [[ -n "$quiet" ]]; then
+        if [[ ! "$quiet" =~ ^[0-9]+$ ]] || [[ "$quiet" -eq 0 ]]; then
+            die "quiet seconds must be a positive integer, got '$quiet'"
+        fi
+    fi
+
+    local start_time
+    start_time="$(date +%s)"
+    local last_hash="" last_change_time="$start_time"
+
+    while true; do
+        local now
+        now="$(date +%s)"
+        local elapsed=$(( now - start_time ))
+
+        if (( elapsed >= timeout )); then
+            log_event ">" "$target" "wait" "timeout=${timeout}s"
+            die "wait timed out after ${timeout}s"
+        fi
+
+        local content
+        content="$(wezterm cli get-text --pane-id "$target" --start-line -50)"
+
+        if [[ -n "$match" ]]; then
+            local matched_line
+            matched_line="$(printf '%s\n' "$content" | grep -E "$match" | tail -1)" || true
+            if [[ -n "$matched_line" ]]; then
+                mark_read "$target"
+                log_event ">" "$target" "wait" "--match matched=${elapsed}s"
+                if [[ "$JSON_OUTPUT" == "true" ]]; then
+                    local encoded
+                    encoded="$(printf '%s' "$matched_line" | jq -Rs '.')"
+                    printf '{"status":"ok","command":"wait","pane_id":"%s","matched_line":%s,"elapsed_seconds":%d}\n' \
+                        "$target" "$encoded" "$elapsed"
+                else
+                    printf '%s\n' "$matched_line"
+                fi
+                return 0
+            fi
+        fi
+
+        if [[ -n "$quiet" ]]; then
+            local current_hash
+            current_hash="$(printf '%s' "$content" | cksum | cut -d' ' -f1)"
+            if [[ "$current_hash" != "$last_hash" ]]; then
+                last_hash="$current_hash"
+                last_change_time="$now"
+            fi
+            local quiet_elapsed=$(( now - last_change_time ))
+            if (( quiet_elapsed >= quiet )); then
+                mark_read "$target"
+                log_event ">" "$target" "wait" "--quiet ${quiet}s settled=${elapsed}s"
+                if [[ "$JSON_OUTPUT" == "true" ]]; then
+                    json_ok "wait" "pane_id=$target" "quiet_seconds=$quiet" "elapsed_seconds=$elapsed"
+                else
+                    echo "pane $target quiet for ${quiet}s (waited ${elapsed}s)"
+                fi
+                return 0
+            fi
+        fi
+
+        sleep "$interval"
+    done
+}
+
 cmd_doctor() {
     local ok=true
 
@@ -412,6 +518,12 @@ COMMANDS:
   name <target> <label>       Label a pane for easy reference
   resolve <label>             Show pane ID for a label
   id                          Print current pane ID ($WEZTERM_PANE)
+  wait <target> <condition>       Wait for pane content to match condition
+                                  --match <regex>   Wait for regex match
+                                  --quiet <secs>    Wait for output to settle
+                                  --prompt          Wait for shell/agent prompt
+                                  --timeout <secs>  Max wait (default: 120)
+                                  --interval <secs> Poll interval (default: 2)
   log [--tail <n>] [--clear]      View or clear the audit log
   doctor                      Run diagnostics
 
@@ -444,6 +556,7 @@ main() {
         resolve)    shift; cmd_resolve "$@" ;;
         id)         cmd_id ;;
         doctor)     cmd_doctor ;;
+        wait)       shift; cmd_wait "$@" ;;
         log)        shift; cmd_log "$@" ;;
         --version)  if [[ "$JSON_OUTPUT" == "true" ]]; then
                         json_ok "version" "version=$VERSION"
