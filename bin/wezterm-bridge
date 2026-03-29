@@ -272,6 +272,7 @@ cmd_type() {
     [[ $# -eq 0 ]] && die "type requires text argument"
     printf '%s' "$*" | wezterm cli send-text --pane-id "$target" --no-paste
     if [[ "$enter" == "true" ]]; then
+        sleep 0.05
         printf '\r' | wezterm cli send-text --pane-id "$target" --no-paste
     fi
     clear_read "$target"
@@ -344,6 +345,7 @@ cmd_message() {
     local sender="${label:-pane:$pane_id}"
     printf '%s' "[wezterm-bridge from:${sender}] $*" | wezterm cli send-text --pane-id "$target" --no-paste
     if [[ "$enter" == "true" ]]; then
+        sleep 0.05
         printf '\r' | wezterm cli send-text --pane-id "$target" --no-paste
     fi
     clear_read "$target"
