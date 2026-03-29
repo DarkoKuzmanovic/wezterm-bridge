@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BRIDGE="$(cd "$(dirname "$0")/.." && pwd)/bin/wezterm-bridge"
+BRIDGE="$(cd "$(dirname "$0")/.." >/dev/null && pwd)/bin/wezterm-bridge"
 GUARD_PREFIX="/tmp/wezterm-bridge-read"
 PASS=0; FAIL=0
 
