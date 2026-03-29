@@ -506,6 +506,50 @@ cmd_wait() {
     done
 }
 
+cmd_spawn() {
+    require_args 1 $# "spawn"
+    require_wezterm
+    local label="$1"; shift
+    local cmd="" cwd="" direction="--bottom"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --cmd)       cmd="$2"; shift 2 ;;
+            --cwd)       cwd="$2"; shift 2 ;;
+            --horizontal) direction="--right"; shift ;;
+            *)           die "unknown flag '$1' for spawn" ;;
+        esac
+    done
+
+    local args=("wezterm" "cli" "split-pane" "$direction")
+    [[ -n "$cwd" ]] && args+=(--cwd "$cwd")
+    if [[ -n "$cmd" ]]; then
+        args+=(--)
+        args+=($cmd)
+    fi
+
+    local new_pane_id
+    new_pane_id="$("${args[@]}")"
+
+    # Label the new pane (dedup existing labels)
+    ensure_label_dir
+    local f
+    for f in "$LABEL_DIR"/*; do
+        [[ -f "$f" ]] || continue
+        if [[ "$(cat "$f")" == "$label" ]]; then
+            rm -f "$f"
+        fi
+    done
+    printf '%s\n' "$label" > "$LABEL_DIR/$new_pane_id"
+
+    log_event ">" "-" "spawn" "$label pane=$new_pane_id"
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+        json_ok "spawn" "pane_id=$new_pane_id" "label=$label"
+    else
+        echo "spawned pane $new_pane_id as '$label'"
+    fi
+}
+
 cmd_doctor() {
     local ok=true
 
@@ -595,6 +639,10 @@ COMMANDS:
                                   --prompt          Wait for shell/agent prompt
                                   --timeout <secs>  Max wait (default: 120)
                                   --interval <secs> Poll interval (default: 2)
+  spawn <label> [options]         Split pane, start command, label it
+                                  --cmd <command>   Command to run (default: $SHELL)
+                                  --cwd <dir>       Working directory
+                                  --horizontal      Side-by-side split
   log [--tail <n>] [--clear]      View or clear the audit log
   doctor                      Run diagnostics
 
@@ -626,6 +674,7 @@ main() {
         name)       shift; cmd_name "$@" ;;
         resolve)    shift; cmd_resolve "$@" ;;
         id)         cmd_id ;;
+        spawn)      shift; cmd_spawn "$@" ;;
         doctor)     cmd_doctor ;;
         wait)       shift; cmd_wait "$@" ;;
         log)        shift; cmd_log "$@" ;;
