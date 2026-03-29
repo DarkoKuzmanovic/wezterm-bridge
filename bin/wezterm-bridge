@@ -382,6 +382,33 @@ wf_var_lookup() {
     fi
 }
 
+resolve_workflow() {
+    local name="$1"
+
+    # Explicit path: contains / or ends in .wb
+    if [[ "$name" == */* || "$name" == *.wb ]]; then
+        [[ -f "$name" ]] || die "workflow file not found: $name"
+        echo "$name"
+        return
+    fi
+
+    # Project-local
+    local project_path=".wezterm-bridge/workflows/${name}.wb"
+    if [[ -f "$project_path" ]]; then
+        echo "$(pwd)/.wezterm-bridge/workflows/${name}.wb"
+        return
+    fi
+
+    # Global
+    local global_path="$HOME/.wezterm-bridge/workflows/${name}.wb"
+    if [[ -f "$global_path" ]]; then
+        echo "$global_path"
+        return
+    fi
+
+    die "workflow '$name' not found. Searched: ./$project_path, $global_path"
+}
+
 # --- Commands ---
 
 cmd_id() {
