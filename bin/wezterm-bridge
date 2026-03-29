@@ -107,6 +107,14 @@ cmd_name() {
         target="$(resolve_label "$target")"
     fi
     ensure_label_dir
+    # Remove any existing pane with this label to prevent duplicates
+    local f
+    for f in "$LABEL_DIR"/*; do
+        [[ -f "$f" ]] || continue
+        if [[ "$(cat "$f")" == "$label" ]]; then
+            rm -f "$f"
+        fi
+    done
     printf '%s\n' "$label" > "$LABEL_DIR/$target"
     echo "pane $target labeled '$label'"
 }
@@ -256,23 +264,31 @@ cmd_doctor() {
 
     # Check WezTerm connectivity
     if wezterm cli list >/dev/null 2>&1; then
-        local pane_count
-        pane_count="$(wezterm cli list --format json | jq 'length')"
-        echo "  [ok] WezTerm connected — $pane_count pane(s) visible"
+        if command -v jq >/dev/null 2>&1; then
+            local pane_count
+            pane_count="$(wezterm cli list --format json | jq 'length')"
+            echo "  [ok] WezTerm connected — $pane_count pane(s) visible"
+        else
+            echo "  [ok] WezTerm connected (install jq for pane count)"
+        fi
     else
         echo "  [!!] Cannot connect to WezTerm — is it running?"
         ok=false
     fi
 
     # Check label dir
-    ensure_label_dir
+    ensure_dirs
     local label_count
     label_count="$(find "$LABEL_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
     echo "  [ok] Label dir: $LABEL_DIR ($label_count label(s))"
 
     # Check guard files
-    local guard_count
-    guard_count="$(ls ${GUARD_PREFIX}-* 2>/dev/null | wc -l | tr -d ' ')"
+    local guard_dir
+    guard_dir="$(dirname "$GUARD_PREFIX")"
+    local guard_count=0
+    if [[ -d "$guard_dir" ]]; then
+        guard_count="$(find "$guard_dir" -name 'read-*' -type f 2>/dev/null | wc -l | tr -d ' ')"
+    fi
     echo "  [ok] Active read guards: $guard_count"
 
     echo ""

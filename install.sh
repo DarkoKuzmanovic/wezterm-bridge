@@ -90,9 +90,10 @@ cmd_uninstall() {
         ok "removed PATH entry from $rc_file"
     fi
 
-    # Clean temp files
-    rm -f /tmp/wezterm-bridge-read-*
-    rm -rf /tmp/wezterm-bridge-labels
+    # Clean temp files (both old flat layout and new UID-scoped layout)
+    rm -f /tmp/wezterm-bridge-read-* 2>/dev/null
+    rm -rf /tmp/wezterm-bridge-labels 2>/dev/null
+    rm -rf "/tmp/wezterm-bridge-$(id -u)" 2>/dev/null
     ok "cleaned temp files"
 
     echo "Done."
