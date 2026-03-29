@@ -107,6 +107,69 @@ cmd_resolve() {
     resolve_label "$1"
 }
 
+cmd_type() {
+    require_args 2 $# "type"
+    local target
+    target="$(resolve_target "$1")"
+    require_read "$target"
+    require_wezterm
+    echo "$2" | wezterm cli send-text --pane-id "$target" --no-paste
+    clear_read "$target"
+}
+
+cmd_keys() {
+    require_args 2 $# "keys"
+    local target
+    target="$(resolve_target "$1")"
+    require_read "$target"
+    shift # consume target
+    require_wezterm
+    local seq=""
+    for key in "$@"; do
+        case "$key" in
+            Enter)   seq+='\n' ;;
+            Escape)  seq+='\x1b' ;;
+            Tab)     seq+='\t' ;;
+            C-c)     seq+='\x03' ;;
+            C-d)     seq+='\x04' ;;
+            C-z)     seq+='\x1a' ;;
+            C-l)     seq+='\x0c' ;;
+            C-a)     seq+='\x01' ;;
+            C-e)     seq+='\x05' ;;
+            C-u)     seq+='\x15' ;;
+            C-k)     seq+='\x0b' ;;
+            C-w)     seq+='\x17' ;;
+            Space)   seq+=' ' ;;
+            BSpace)  seq+='\x7f' ;;
+            Up)      seq+='\x1b[A' ;;
+            Down)    seq+='\x1b[B' ;;
+            Right)   seq+='\x1b[C' ;;
+            Left)    seq+='\x1b[D' ;;
+            *)       die "unknown key: $key. Supported: Enter, Escape, Tab, C-c, C-d, C-z, C-l, C-a, C-e, C-u, C-k, C-w, Space, BSpace, Up, Down, Left, Right" ;;
+        esac
+    done
+    printf "$seq" | wezterm cli send-text --pane-id "$target" --no-paste
+    clear_read "$target"
+}
+
+cmd_message() {
+    require_args 2 $# "message"
+    local target
+    target="$(resolve_target "$1")"
+    require_read "$target"
+    require_wezterm
+    local pane_id="${WEZTERM_PANE:-unknown}"
+    local label=""
+    ensure_label_dir
+    if [[ -f "$LABEL_DIR/$pane_id" ]]; then
+        label="$(cat "$LABEL_DIR/$pane_id")"
+    fi
+    local sender="${label:-pane:$pane_id}"
+    local msg="[wezterm-bridge from:${sender}] $2"
+    echo "$msg" | wezterm cli send-text --pane-id "$target" --no-paste
+    clear_read "$target"
+}
+
 # --- Main Dispatch ---
 
 show_help() {
