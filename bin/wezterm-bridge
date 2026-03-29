@@ -209,6 +209,66 @@ cmd_list() {
     done
 }
 
+cmd_doctor() {
+    local ok=true
+
+    echo "wezterm-bridge $VERSION diagnostics"
+    echo "=================================="
+
+    # Check wezterm
+    if command -v wezterm >/dev/null 2>&1; then
+        echo "  [ok] wezterm found: $(wezterm --version)"
+    else
+        echo "  [!!] wezterm not found"
+        ok=false
+    fi
+
+    # Check jq
+    if command -v jq >/dev/null 2>&1; then
+        echo "  [ok] jq found: $(jq --version)"
+    else
+        echo "  [!!] jq not found — install with your package manager"
+        ok=false
+    fi
+
+    # Check WEZTERM_PANE
+    if [[ -n "${WEZTERM_PANE:-}" ]]; then
+        echo "  [ok] WEZTERM_PANE=$WEZTERM_PANE"
+    else
+        echo "  [!!] WEZTERM_PANE not set — not running inside WezTerm?"
+        ok=false
+    fi
+
+    # Check WezTerm connectivity
+    if wezterm cli list >/dev/null 2>&1; then
+        local pane_count
+        pane_count="$(wezterm cli list --format json | jq 'length')"
+        echo "  [ok] WezTerm connected — $pane_count pane(s) visible"
+    else
+        echo "  [!!] Cannot connect to WezTerm — is it running?"
+        ok=false
+    fi
+
+    # Check label dir
+    ensure_label_dir
+    local label_count
+    label_count="$(find "$LABEL_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    echo "  [ok] Label dir: $LABEL_DIR ($label_count label(s))"
+
+    # Check guard files
+    local guard_count
+    guard_count="$(ls ${GUARD_PREFIX}-* 2>/dev/null | wc -l | tr -d ' ')"
+    echo "  [ok] Active read guards: $guard_count"
+
+    echo ""
+    if $ok; then
+        echo "All checks passed."
+    else
+        echo "Some checks failed. Fix the issues above."
+        exit 1
+    fi
+}
+
 # --- Main Dispatch ---
 
 show_help() {
