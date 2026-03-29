@@ -324,6 +324,64 @@ tokenize_line() {
     fi
 }
 
+# --- Workflow Parser ---
+
+parse_workflow() {
+    local filepath="$1"
+    [[ -f "$filepath" ]] || die "workflow file not found: $filepath"
+
+    WF_NAME=""
+    WF_DESCRIPTION=""
+    WF_BODY=()
+    declare -gA WF_VARS=()
+
+    local line_num=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        (( line_num++, 1 ))
+
+        # Skip blank lines
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]] && continue
+
+        # Header lines
+        if [[ "$line" =~ ^'#!' ]]; then
+            local content="${line#'#!'}"
+            content="${content#"${content%%[![:space:]]*}"}"  # trim leading whitespace
+            if [[ "$content" =~ ^name:[[:space:]]*(.*) ]]; then
+                WF_NAME="${BASH_REMATCH[1]}"
+            elif [[ "$content" =~ ^description:[[:space:]]*(.*) ]]; then
+                WF_DESCRIPTION="${BASH_REMATCH[1]}"
+            elif [[ "$content" =~ ^var:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*) ]]; then
+                WF_VARS["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+            else
+                die "unknown header directive at line $line_num: $content"
+            fi
+            continue
+        fi
+
+        # Skip comment lines
+        [[ "$line" =~ ^[[:space:]]*'#' ]] && continue
+
+        # Body lines — trim leading whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+
+        # Reject nested run
+        if [[ "$line" =~ ^run([[:space:]]|$) ]]; then
+            die "nested 'run' is not allowed in workflow files (line $line_num)"
+        fi
+
+        WF_BODY+=("$line")
+    done < "$filepath"
+}
+
+wf_var_lookup() {
+    local name="$1"
+    if [[ -v "WF_VARS[$name]" ]]; then
+        printf '%s' "${WF_VARS[$name]}"
+    else
+        return 1
+    fi
+}
+
 # --- Commands ---
 
 cmd_id() {
