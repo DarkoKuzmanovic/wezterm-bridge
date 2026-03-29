@@ -89,6 +89,24 @@ cmd_id() {
     echo "$WEZTERM_PANE"
 }
 
+cmd_name() {
+    require_args 2 $# "name"
+    local target="$1"
+    local label="$2"
+    # If target is a label, resolve it first
+    if [[ ! "$target" =~ ^[0-9]+$ ]]; then
+        target="$(resolve_label "$target")"
+    fi
+    ensure_label_dir
+    echo "$label" > "$LABEL_DIR/$target"
+    echo "pane $target labeled '$label'"
+}
+
+cmd_resolve() {
+    require_args 1 $# "resolve"
+    resolve_label "$1"
+}
+
 # --- Main Dispatch ---
 
 show_help() {
