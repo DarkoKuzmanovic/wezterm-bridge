@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="2.0.0"
 INSTALL_DIR="$HOME/.wezterm-bridge"
 BIN_DIR="$INSTALL_DIR/bin"
 SKILL_DIR="$INSTALL_DIR/skills"

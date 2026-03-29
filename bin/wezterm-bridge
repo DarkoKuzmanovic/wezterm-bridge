@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="2.0.0"
 LABEL_DIR="/tmp/wezterm-bridge-${UID:-$(id -u)}/labels"
 GUARD_PREFIX="/tmp/wezterm-bridge-${UID:-$(id -u)}/read"
 LOG_FILE="/tmp/wezterm-bridge-${UID:-$(id -u)}/bridge.log"
