@@ -170,6 +170,45 @@ cmd_message() {
     clear_read "$target"
 }
 
+cmd_read() {
+    require_args 1 $# "read"
+    require_wezterm
+    local target
+    target="$(resolve_target "$1")"
+    local lines="${2:-50}"
+
+    # Negative start-line = scrollback offset
+    local start_line="-${lines}"
+    wezterm cli get-text --pane-id "$target" --start-line "$start_line"
+    mark_read "$target"
+}
+
+cmd_list() {
+    require_wezterm
+    require_jq
+
+    ensure_label_dir
+
+    # Header
+    printf "%-8s %-6s %-20s %-10s %s\n" "PANE_ID" "TAB" "TITLE" "LABEL" "CWD"
+    printf "%-8s %-6s %-20s %-10s %s\n" "-------" "-----" "--------------------" "----------" "---"
+
+    wezterm cli list --format json | jq -r '.[] | "\(.pane_id)\t\(.tab_id)\t\(.title)\t\(.cwd)"' | \
+    while IFS=$'\t' read -r pane_id tab_id title cwd; do
+        local label="-"
+        if [[ -f "$LABEL_DIR/$pane_id" ]]; then
+            label="$(cat "$LABEL_DIR/$pane_id")"
+        fi
+        # Shorten home dir
+        cwd="${cwd/#$HOME/~}"
+        # Truncate title
+        if [[ ${#title} -gt 20 ]]; then
+            title="${title:0:17}..."
+        fi
+        printf "%-8s %-6s %-20s %-10s %s\n" "$pane_id" "$tab_id" "$title" "$label" "$cwd"
+    done
+}
+
 # --- Main Dispatch ---
 
 show_help() {
