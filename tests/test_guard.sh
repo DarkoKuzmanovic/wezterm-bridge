@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BRIDGE="$(cd "$(dirname "$0")/.." >/dev/null && pwd)/bin/wezterm-bridge"
-GUARD_PREFIX="/tmp/wezterm-bridge-read"
+GUARD_PREFIX="/tmp/wezterm-bridge-${UID:-$(id -u)}/read"
 PASS=0; FAIL=0
 
 assert_eq() {

@@ -52,14 +52,21 @@ cmd_install() {
     fi
 
     # Update PATH
-    local rc_file
+    local rc_file shell_name
     rc_file="$(detect_shell_rc)"
-    local path_line="export PATH=\"$BIN_DIR:\$PATH\""
+    shell_name="$(basename "${SHELL:-bash}")"
+
+    # Ensure parent directory exists (e.g., ~/.config/fish/)
+    mkdir -p "$(dirname "$rc_file")"
 
     if ! grep -qF "$BIN_DIR" "$rc_file" 2>/dev/null; then
         echo "" >> "$rc_file"
         echo "# wezterm-bridge" >> "$rc_file"
-        echo "$path_line" >> "$rc_file"
+        if [[ "$shell_name" == "fish" ]]; then
+            echo "set -gx PATH $BIN_DIR \$PATH" >> "$rc_file"
+        else
+            echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$rc_file"
+        fi
         ok "added $BIN_DIR to PATH in $rc_file"
         info "run: source $rc_file"
     else
