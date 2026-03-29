@@ -176,7 +176,7 @@ Validates without executing:
 - Expands variables (checks for undefined)
 - Validates command names (rejects unknown commands, rejects `run`)
 - Rejects disallowed syntax (`$(...)`, backticks, etc.)
-- Tracks labels declared by `spawn` steps so that later `read`/`message`/`type`/`keys` steps targeting those labels validate correctly even though the panes do not exist yet
+- Tracks labels declared by `spawn` and `name` steps so that later `read`/`message`/`type`/`keys` steps targeting those labels validate correctly even though the panes do not exist yet
 
 Exits 0 if valid, 1 with error details if not.
 
