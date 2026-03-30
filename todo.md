@@ -10,9 +10,9 @@
   Priority: high  
   Add configurable guardrails for which panes, commands, keys, and message patterns are allowed. This reduces accidental or unsafe automation when multiple agents are sharing a live terminal session.
 
-- **Task handoff primitives**  
-  Priority: high  
-  Add explicit handoff semantics such as claim, assign, ack, done, blocked, and return-with-context. This would let agents coordinate ownership and status without overloading free-form chat messages.
+- **Task handoff primitives**
+  Priority: high
+  Add explicit handoff semantics such as claim, assign, ack, done, blocked, and return-with-context. The orchestrate skill's message convention (`task:` and `status:` fields) provides the foundation — this item extends it with richer lifecycle tracking and multi-step coordination.
 
 ## Medium
 
@@ -28,6 +28,3 @@
   Priority: medium  
   Add automatic injection of the bridge skill into spawned or attached agent contexts when the environment supports it. This removes manual setup drift and makes the bridge protocol more consistent across tools.
 
-- **Codex-integration bridge mode**  
-  Priority: medium  
-  Add a first-class integration mode for Codex that understands pane labels, read guards, waits, and structured handoffs out of the box. This would lower friction for mixed-agent sessions and make bridge usage more scriptable from Codex workflows.
