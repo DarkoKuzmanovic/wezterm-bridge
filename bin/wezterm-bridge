@@ -50,8 +50,6 @@ log_event() {
     printf '%s\n' "$line" >> "$LOG_FILE"
 }
 
-# --- Utilities ---
-
 die() {
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         json_error "$*"
@@ -68,6 +66,8 @@ require_args() {
     fi
 }
 
+_require_posint() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 0 )) || die "$2"; }
+
 require_wezterm() {
     command -v wezterm >/dev/null 2>&1 || die "wezterm is not installed"
 }
@@ -77,23 +77,14 @@ require_jq() {
 }
 
 ensure_dirs() {
+    [[ -d "$LABEL_DIR" ]] && return
     local base="/tmp/wezterm-bridge-${UID:-$(id -u)}"
-    if [[ ! -d "$base" ]]; then
-        mkdir -p "$base"
-        chmod 700 "$base"
-    fi
-    [[ -d "$LABEL_DIR" ]] || mkdir -p "$LABEL_DIR"
-    [[ -d "$CURSOR_DIR" ]] || mkdir -p "$CURSOR_DIR"
-    [[ -d "$LOCK_DIR" ]] || mkdir -p "$LOCK_DIR"
-}
-
-ensure_label_dir() {
-    ensure_dirs
+    mkdir -p "$LABEL_DIR" "$CURSOR_DIR" "$LOCK_DIR"
+    chmod 700 "$base"
 }
 
 save_cursor() {
     local pane_id="$1" content="$2"
-    mkdir -p "$CURSOR_DIR"
     local line_count
     line_count="$(printf '%s\n' "$content" | wc -l | tr -d ' ')"
     local last_line
@@ -157,33 +148,20 @@ check_lock() {
     fi
 }
 
-# --- Read Guard ---
-
-guard_path() {
-    local pane_id="$1"
-    echo "${GUARD_PREFIX}-${pane_id}"
-}
-
-mark_read() {
-    touch "$(guard_path "$1")"
-}
-
 require_read() {
-    local guard
-    guard="$(guard_path "$1")"
-    if [[ ! -f "$guard" ]]; then
-        die "must read pane $1 before interacting. Run: wezterm-bridge read $1"
-    fi
+    [[ -f "${GUARD_PREFIX}-${1}" ]] || die "must read pane $1 before interacting. Run: wezterm-bridge read $1"
 }
 
-clear_read() {
-    rm -f "$(guard_path "$1")"
+_dedup_label() {
+    local label="$1" f
+    for f in "$LABEL_DIR"/*; do
+        [[ -f "$f" ]] || continue
+        if [[ "$(cat "$f")" == "$label" ]]; then rm -f "$f"; fi
+    done
 }
-
-# --- Target Resolution ---
 
 resolve_label() {
-    ensure_label_dir
+    ensure_dirs
     local label="$1"
     for f in "$LABEL_DIR"/*; do
         [[ -f "$f" ]] || continue
@@ -197,35 +175,41 @@ resolve_label() {
 
 resolve_target() {
     local target="$1"
-    # Numeric pane ID — use directly
     if [[ "$target" =~ ^[0-9]+$ ]]; then
         echo "$target"
         return
     fi
-    # Otherwise treat as label
     resolve_label "$target"
 }
 
-# --- Workflow Tokenizer ---
+_expand_var() {
+    local line="$1" i="$2" len="$3" var_lookup="$4"
+    local next="${line:i+1:1}"
+    [[ "$next" == '(' ]] && die "\$(...) command substitution is not allowed in workflow files"
+    [[ "$next" == '{' ]] && die "\${...} brace expansion is not allowed in workflow files"
+    local varname="" j=$(( i + 1 ))
+    while (( j < len )) && [[ "${line:j:1}" =~ [A-Za-z0-9_] ]]; do
+        varname+="${line:j:1}"; (( j++, 1 ))
+    done
+    [[ -z "$varname" ]] && die "bare \$ in workflow file (use \\\$ for literal dollar)"
+    _EXPAND_END=$j
+    if ! _EXPAND_VAL="$("$var_lookup" "$varname")"; then
+        die "undefined variable '\$$varname' in workflow file"
+    fi
+}
 
 tokenize_line() {
-    local line="$1"
-    local var_lookup="$2"
+    local line="$1" var_lookup="$2"
     TOKENS=()
     local i=0 len=${#line} token="" in_quotes=false
 
     while (( i < len )); do
         local ch="${line:i:1}"
 
-        # Reject single quotes
         if [[ "$ch" == "'" ]] && ! $in_quotes; then
             die "single quotes are not supported in workflow files"
         fi
-
-        # Reject backticks
-        if [[ "$ch" == '`' ]]; then
-            die "backtick substitution is not allowed in workflow files"
-        fi
+        [[ "$ch" == '`' ]] && die "backtick substitution is not allowed in workflow files"
 
         if $in_quotes; then
             if [[ "$ch" == '\' ]]; then
@@ -241,90 +225,36 @@ tokenize_line() {
                 in_quotes=false
                 (( i++, 1 ))
             elif [[ "$ch" == '$' ]]; then
-                local next="${line:i+1:1}"
-                if [[ "$next" == '(' ]]; then
-                    die "\$(...) command substitution is not allowed in workflow files"
-                fi
-                if [[ "$next" == '{' ]]; then
-                    die "\${...} brace expansion is not allowed in workflow files"
-                fi
-                local varname=""
-                local j=$(( i + 1 ))
-                while (( j < len )) && [[ "${line:j:1}" =~ [A-Za-z0-9_] ]]; do
-                    varname+="${line:j:1}"
-                    (( j++, 1 ))
-                done
-                if [[ -z "$varname" ]]; then
-                    die "bare \$ in workflow file (use \\\$ for literal dollar)"
-                fi
-                local varval
-                if ! varval="$("$var_lookup" "$varname")"; then
-                    die "undefined variable '\$$varname' in workflow file"
-                fi
-                token+="$varval"
-                i=$j
+                _expand_var "$line" "$i" "$len" "$var_lookup"
+                token+="$_EXPAND_VAL"; i=$_EXPAND_END
             else
-                token+="$ch"
-                (( i++, 1 ))
+                token+="$ch"; (( i++, 1 ))
             fi
         else
             if [[ "$ch" == '"' ]]; then
-                in_quotes=true
-                (( i++, 1 ))
+                in_quotes=true; (( i++, 1 ))
             elif [[ "$ch" == ' ' || "$ch" == $'\t' ]]; then
-                if [[ -n "$token" ]]; then
-                    TOKENS+=("$token")
-                    token=""
-                fi
+                [[ -n "$token" ]] && TOKENS+=("$token") && token=""
                 (( i++, 1 ))
             elif [[ "$ch" == '\' ]]; then
                 local next="${line:i+1:1}"
                 if [[ "$next" == '$' ]]; then
-                    token+='$'
-                    (( i += 2 ))
+                    token+='$'; (( i += 2 ))
                 else
                     die "invalid escape '\\$next' outside quotes in workflow file"
                 fi
             elif [[ "$ch" == '$' ]]; then
-                local next="${line:i+1:1}"
-                if [[ "$next" == '(' ]]; then
-                    die "\$(...) command substitution is not allowed in workflow files"
-                fi
-                if [[ "$next" == '{' ]]; then
-                    die "\${...} brace expansion is not allowed in workflow files"
-                fi
-                local varname=""
-                local j=$(( i + 1 ))
-                while (( j < len )) && [[ "${line:j:1}" =~ [A-Za-z0-9_] ]]; do
-                    varname+="${line:j:1}"
-                    (( j++, 1 ))
-                done
-                if [[ -z "$varname" ]]; then
-                    die "bare \$ in workflow file (use \\\$ for literal dollar)"
-                fi
-                local varval
-                if ! varval="$("$var_lookup" "$varname")"; then
-                    die "undefined variable '\$$varname' in workflow file"
-                fi
-                token+="$varval"
-                i=$j
+                _expand_var "$line" "$i" "$len" "$var_lookup"
+                token+="$_EXPAND_VAL"; i=$_EXPAND_END
             else
-                token+="$ch"
-                (( i++, 1 ))
+                token+="$ch"; (( i++, 1 ))
             fi
         fi
     done
 
-    if $in_quotes; then
-        die "unterminated quote in workflow file"
-    fi
-
-    if [[ -n "$token" ]]; then
-        TOKENS+=("$token")
-    fi
+    $in_quotes && die "unterminated quote in workflow file"
+    [[ -n "$token" ]] && TOKENS+=("$token")
 }
-
-# --- Workflow Parser ---
 
 parse_workflow() {
     local filepath="$1"
@@ -339,10 +269,8 @@ parse_workflow() {
     while IFS= read -r line || [[ -n "$line" ]]; do
         (( line_num++, 1 ))
 
-        # Skip blank lines
         [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]] && continue
 
-        # Header lines
         if [[ "$line" =~ ^'#!' ]]; then
             local content="${line#'#!'}"
             content="${content#"${content%%[![:space:]]*}"}"  # trim leading whitespace
@@ -358,13 +286,11 @@ parse_workflow() {
             continue
         fi
 
-        # Skip comment lines
         [[ "$line" =~ ^[[:space:]]*'#' ]] && continue
 
-        # Body lines — trim leading whitespace
         line="${line#"${line%%[![:space:]]*}"}"
 
-        # Reject nested run
+
         if [[ "$line" =~ ^run([[:space:]]|$) ]]; then
             die "nested 'run' is not allowed in workflow files (line $line_num)"
         fi
@@ -385,21 +311,18 @@ wf_var_lookup() {
 resolve_workflow() {
     local name="$1"
 
-    # Explicit path: contains / or ends in .wb
     if [[ "$name" == */* || "$name" == *.wb ]]; then
         [[ -f "$name" ]] || die "workflow file not found: $name"
         echo "$name"
         return
     fi
 
-    # Project-local
     local project_path=".wezterm-bridge/workflows/${name}.wb"
     if [[ -f "$project_path" ]]; then
         echo "$(pwd)/.wezterm-bridge/workflows/${name}.wb"
         return
     fi
 
-    # Global
     local global_path="$HOME/.wezterm-bridge/workflows/${name}.wb"
     if [[ -f "$global_path" ]]; then
         echo "$global_path"
@@ -408,8 +331,6 @@ resolve_workflow() {
 
     die "workflow '$name' not found. Searched: ./$project_path, $global_path"
 }
-
-# --- Workflow Runner ---
 
 _wf_valid_commands=(list read type keys message name resolve id spawn lock unlock wait log doctor)
 
@@ -426,10 +347,8 @@ cmd_run() {
     wf_path="$(resolve_workflow "$1")"
     shift
 
-    # Parse the workflow file
     parse_workflow "$wf_path"
 
-    # Apply CLI variable overrides
     for arg in "$@"; do
         if [[ "$arg" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
             local oname="${BASH_REMATCH[1]}"
@@ -451,7 +370,6 @@ cmd_run() {
         return
     fi
 
-    # Execute steps
     local last_read_output=""
     local step=0
 
@@ -461,17 +379,14 @@ cmd_run() {
         local command="${TOKENS[0]}"
         local args=("${TOKENS[@]:1}")
 
-        # Validate command
         local valid=false
         for vc in "${_wf_valid_commands[@]}"; do
             [[ "$vc" == "$command" ]] && valid=true && break
         done
         $valid || die "unknown command '$command' in workflow '$wf_label' (step $step/$total)"
 
-        # Log step progress to stderr
         echo "[workflow:$wf_label] step $step/$total: $body_line" >&2
 
-        # Execute in subshell, capture output
         local step_output
         if ! step_output="$(cmd_"$command" "${args[@]}" 2>&1)"; then
             if [[ "$JSON_OUTPUT" == "true" ]]; then
@@ -487,18 +402,15 @@ cmd_run() {
             fi
         fi
 
-        # Capture last read output
         if [[ "$command" == "read" ]]; then
             last_read_output="$step_output"
         fi
 
-        # Non-read output goes to stderr as progress
         if [[ "$command" != "read" && -n "$step_output" ]]; then
             echo "$step_output" >&2
         fi
     done
 
-    # Print workflow result
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         local encoded_result
         encoded_result="$(json_escape "$last_read_output")"
@@ -515,7 +427,6 @@ _wf_check() {
     local step=0
     local -A check_labels=()
 
-    # Pre-populate with existing labels
     if [[ -d "$LABEL_DIR" ]]; then
         for lfile in "$LABEL_DIR"/*; do
             [[ -f "$lfile" ]] || continue
@@ -530,14 +441,12 @@ _wf_check() {
         tokenize_line "$body_line" wf_var_lookup
         local command="${TOKENS[0]}"
 
-        # Validate command name
         local valid=false
         for vc in "${_wf_valid_commands[@]}"; do
             [[ "$vc" == "$command" ]] && valid=true && break
         done
         $valid || die "unknown command '$command' in workflow '$wf_label' (step $step/$total)"
 
-        # Track labels from spawn and name
         if [[ "$command" == "spawn" ]]; then
             check_labels["${TOKENS[1]}"]=1
         elif [[ "$command" == "name" ]] && [[ ${#TOKENS[@]} -ge 3 ]]; then
@@ -551,8 +460,6 @@ _wf_check() {
         echo "workflow '$wf_label' is valid ($total steps)" >&2
     fi
 }
-
-# --- Commands ---
 
 cmd_id() {
     if [[ -z "${WEZTERM_PANE:-}" ]]; then
@@ -569,19 +476,11 @@ cmd_name() {
     require_args 2 $# "name"
     local target="$1"
     local label="$2"
-    # If target is a label, resolve it first
     if [[ ! "$target" =~ ^[0-9]+$ ]]; then
         target="$(resolve_label "$target")"
     fi
-    ensure_label_dir
-    # Remove any existing pane with this label to prevent duplicates
-    local f
-    for f in "$LABEL_DIR"/*; do
-        [[ -f "$f" ]] || continue
-        if [[ "$(cat "$f")" == "$label" ]]; then
-            rm -f "$f"
-        fi
-    done
+    ensure_dirs
+    _dedup_label "$label"
     printf '%s\n' "$label" > "$LABEL_DIR/$target"
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         json_ok "name" "pane_id=$target" "label=$label"
@@ -609,7 +508,7 @@ cmd_type() {
     require_read "$target"
     check_lock "$target"
     require_wezterm
-    shift # consume target
+    shift
     local enter=false
     if [[ "${1:-}" == "--enter" ]]; then
         enter=true
@@ -621,7 +520,7 @@ cmd_type() {
         sleep 0.05
         printf '\r' | wezterm cli send-text --pane-id "$target" --no-paste
     fi
-    clear_read "$target"
+    rm -f "${GUARD_PREFIX}-${target}"
     log_event ">" "$target" "type" "$*"
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         json_ok "type" "pane_id=$target"
@@ -634,7 +533,7 @@ cmd_keys() {
     target="$(resolve_target "$1")"
     require_read "$target"
     check_lock "$target"
-    shift # consume target
+    shift
     require_wezterm
     local seq=""
     for key in "$@"; do
@@ -661,7 +560,7 @@ cmd_keys() {
         esac
     done
     printf "$seq" | wezterm cli send-text --pane-id "$target" --no-paste
-    clear_read "$target"
+    rm -f "${GUARD_PREFIX}-${target}"
     log_event ">" "$target" "keys" "$*"
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         json_ok "keys" "pane_id=$target"
@@ -675,7 +574,7 @@ cmd_message() {
     require_read "$target"
     check_lock "$target"
     require_wezterm
-    shift # consume target
+    shift
     local enter=false
     if [[ "${1:-}" == "--enter" ]]; then
         enter=true
@@ -684,7 +583,7 @@ cmd_message() {
     [[ $# -eq 0 ]] && die "message requires text argument"
     local pane_id="${WEZTERM_PANE:-unknown}"
     local label=""
-    ensure_label_dir
+    ensure_dirs
     if [[ -f "$LABEL_DIR/$pane_id" ]]; then
         label="$(cat "$LABEL_DIR/$pane_id")"
     fi
@@ -694,7 +593,7 @@ cmd_message() {
         sleep 0.05
         printf '\r' | wezterm cli send-text --pane-id "$target" --no-paste
     fi
-    clear_read "$target"
+    rm -f "${GUARD_PREFIX}-${target}"
     log_event ">" "$target" "message" ""
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         json_ok "message" "pane_id=$target" "sender=$sender"
@@ -715,9 +614,7 @@ cmd_read() {
         new_mode=true
     elif [[ -n "${1:-}" ]]; then
         lines="$1"
-        if [[ ! "$lines" =~ ^[0-9]+$ ]] || [[ "$lines" -eq 0 ]]; then
-            die "lines must be a positive integer, got '$lines'"
-        fi
+        _require_posint "$lines" "lines must be a positive integer, got '$lines'"
     fi
 
     local content
@@ -726,7 +623,7 @@ cmd_read() {
         local new_content
         new_content="$(read_since_cursor "$target" "$content")"
         save_cursor "$target" "$content"
-        mark_read "$target"
+        touch "${GUARD_PREFIX}-${target}"
         log_event "<" "$target" "read" "--new"
         if [[ "$JSON_OUTPUT" == "true" ]]; then
             local encoded
@@ -740,7 +637,7 @@ cmd_read() {
         local start_line="-${lines}"
         content="$(wezterm cli get-text --pane-id "$target" --start-line "$start_line")"
         save_cursor "$target" "$content"
-        mark_read "$target"
+        touch "${GUARD_PREFIX}-${target}"
         log_event "<" "$target" "read" "$lines"
         if [[ "$JSON_OUTPUT" == "true" ]]; then
             local encoded
@@ -757,12 +654,11 @@ cmd_list() {
     require_wezterm
     require_jq
 
-    ensure_label_dir
+    ensure_dirs
 
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         local raw_json
         raw_json="$(wezterm cli list --format json)"
-        # Build a label map as JSON object: {"pane_id": "label", ...}
         local label_json="{"
         local first=true
         local f
@@ -775,13 +671,11 @@ cmd_list() {
             label_json+="\"$pid\":\"$(json_escape "$label_val")\""
         done
         label_json+="}"
-        # Use jq to merge labels into the pane list (all escaping handled by jq)
         printf '%s' "$raw_json" | jq -c --argjson labels "$label_json" \
             '[.[] | {pane_id: .pane_id, tab_id: .tab_id, title: .title, label: ($labels[(.pane_id | tostring)] // ""), cwd: .cwd}]'
         return
     fi
 
-    # Header
     printf "%-8s %-6s %-20s %-10s %s\n" "PANE_ID" "TAB" "TITLE" "LABEL" "CWD"
     printf "%-8s %-6s %-20s %-10s %s\n" "-------" "-----" "--------------------" "----------" "---"
 
@@ -791,9 +685,7 @@ cmd_list() {
         if [[ -f "$LABEL_DIR/$pane_id" ]]; then
             label="$(cat "$LABEL_DIR/$pane_id")"
         fi
-        # Shorten home dir
         cwd="${cwd/#$HOME/~}"
-        # Truncate title
         if [[ ${#title} -gt 20 ]]; then
             title="${title:0:17}..."
         fi
@@ -811,9 +703,7 @@ cmd_log() {
     local tail_n=20
     if [[ "${1:-}" == "--tail" ]]; then
         tail_n="${2:-20}"
-        if [[ ! "$tail_n" =~ ^[0-9]+$ ]] || [[ "$tail_n" -eq 0 ]]; then
-            die "--tail requires a positive integer, got '$tail_n'"
-        fi
+        _require_posint "$tail_n" "--tail requires a positive integer, got '$tail_n'"
     fi
     if [[ -f "$LOG_FILE" ]] && [[ -s "$LOG_FILE" ]]; then
         tail -n "$tail_n" "$LOG_FILE"
@@ -856,23 +746,12 @@ cmd_wait() {
         die "wait accepts only one condition (got $conditions)"
     fi
 
-    # Validate numeric args
-    if [[ ! "$timeout" =~ ^[0-9]+$ ]] || [[ "$timeout" -eq 0 ]]; then
-        die "timeout must be a positive integer, got '$timeout'"
-    fi
-    if [[ ! "$interval" =~ ^[0-9]+$ ]] || [[ "$interval" -eq 0 ]]; then
-        die "interval must be a positive integer, got '$interval'"
-    fi
+    _require_posint "$timeout" "timeout must be a positive integer, got '$timeout'"
+    _require_posint "$interval" "interval must be a positive integer, got '$interval'"
 
-    if $prompt; then
-        match='^[›$%#>] ?$'
-    fi
+    $prompt && match='^[›$%#>] ?$'
 
-    if [[ -n "$quiet" ]]; then
-        if [[ ! "$quiet" =~ ^[0-9]+$ ]] || [[ "$quiet" -eq 0 ]]; then
-            die "quiet seconds must be a positive integer, got '$quiet'"
-        fi
-    fi
+    [[ -n "$quiet" ]] && _require_posint "$quiet" "quiet seconds must be a positive integer, got '$quiet'"
 
     local start_time
     start_time="$(date +%s)"
@@ -895,7 +774,7 @@ cmd_wait() {
             local matched_line
             matched_line="$(printf '%s\n' "$content" | grep -E -- "$match" | tail -1)" || true
             if [[ -n "$matched_line" ]]; then
-                mark_read "$target"
+                touch "${GUARD_PREFIX}-${target}"
                 log_event ">" "$target" "wait" "--match matched=${elapsed}s"
                 if [[ "$JSON_OUTPUT" == "true" ]]; then
                     local encoded
@@ -918,7 +797,7 @@ cmd_wait() {
             fi
             local quiet_elapsed=$(( now - last_change_time ))
             if (( quiet_elapsed >= quiet )); then
-                mark_read "$target"
+                touch "${GUARD_PREFIX}-${target}"
                 log_event ">" "$target" "wait" "--quiet ${quiet}s settled=${elapsed}s"
                 if [[ "$JSON_OUTPUT" == "true" ]]; then
                     json_ok "wait" "pane_id=$target" "quiet_seconds=$quiet" "elapsed_seconds=$elapsed"
@@ -960,15 +839,8 @@ cmd_spawn() {
     local new_pane_id
     new_pane_id="$("${args[@]}")"
 
-    # Label the new pane (dedup existing labels)
-    ensure_label_dir
-    local f
-    for f in "$LABEL_DIR"/*; do
-        [[ -f "$f" ]] || continue
-        if [[ "$(cat "$f")" == "$label" ]]; then
-            rm -f "$f"
-        fi
-    done
+    ensure_dirs
+    _dedup_label "$label"
     printf '%s\n' "$label" > "$LABEL_DIR/$new_pane_id"
 
     log_event ">" "-" "spawn" "$label pane=$new_pane_id"
@@ -989,13 +861,10 @@ cmd_lock() {
     if [[ "${2:-}" == "--timeout" ]]; then
         [[ -n "${3:-}" ]] || die "--timeout requires an argument"
         timeout_secs="$3"
-        if [[ ! "$timeout_secs" =~ ^[0-9]+$ ]] || [[ "$timeout_secs" -eq 0 ]]; then
-            die "timeout must be a positive integer, got '$timeout_secs'"
-        fi
+        _require_posint "$timeout_secs" "timeout must be a positive integer, got '$timeout_secs'"
     fi
 
-    mkdir -p "$LOCK_DIR"
-
+    ensure_dirs
     if [[ -f "$LOCK_DIR/$target" ]]; then
         local owner ts existing_timeout
         IFS=: read -r owner ts existing_timeout < "$LOCK_DIR/$target"
@@ -1008,9 +877,8 @@ cmd_lock() {
         fi
     fi
 
-    # Read pane first to verify it exists before acquiring lock
     wezterm cli get-text --pane-id "$target" --start-line -50 >/dev/null
-    mark_read "$target"
+    touch "${GUARD_PREFIX}-${target}"
 
     local now
     now="$(date +%s)"
@@ -1029,7 +897,7 @@ cmd_unlock() {
     local target
     target="$(resolve_target "$1")"
 
-    mkdir -p "$LOCK_DIR"
+    ensure_dirs
     local lock_file="$LOCK_DIR/$target"
 
     if [[ ! -f "$lock_file" ]]; then
@@ -1068,7 +936,6 @@ cmd_doctor() {
     echo "wezterm-bridge $VERSION diagnostics"
     echo "=================================="
 
-    # Check wezterm
     if command -v wezterm >/dev/null 2>&1; then
         echo "  [ok] wezterm found: $(wezterm --version)"
     else
@@ -1076,7 +943,6 @@ cmd_doctor() {
         ok=false
     fi
 
-    # Check jq
     if command -v jq >/dev/null 2>&1; then
         echo "  [ok] jq found: $(jq --version)"
     else
@@ -1084,7 +950,6 @@ cmd_doctor() {
         ok=false
     fi
 
-    # Check WEZTERM_PANE
     if [[ -n "${WEZTERM_PANE:-}" ]]; then
         echo "  [ok] WEZTERM_PANE=$WEZTERM_PANE"
     else
@@ -1092,7 +957,6 @@ cmd_doctor() {
         ok=false
     fi
 
-    # Check WezTerm connectivity
     if wezterm cli list >/dev/null 2>&1; then
         if command -v jq >/dev/null 2>&1; then
             local pane_count
@@ -1106,13 +970,11 @@ cmd_doctor() {
         ok=false
     fi
 
-    # Check label dir
     ensure_dirs
     local label_count
     label_count="$(find "$LABEL_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
     echo "  [ok] Label dir: $LABEL_DIR ($label_count label(s))"
 
-    # Check guard files
     local guard_dir
     guard_dir="$(dirname "$GUARD_PREFIX")"
     local guard_count=0
@@ -1129,8 +991,6 @@ cmd_doctor() {
         exit 1
     fi
 }
-
-# --- Main Dispatch ---
 
 show_help() {
     cat <<'USAGE'
