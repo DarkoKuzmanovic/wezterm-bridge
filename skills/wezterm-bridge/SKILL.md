@@ -99,6 +99,32 @@ wezterm-bridge read <sender_pane_or_label>
 wezterm-bridge message <sender_pane_or_label> --enter 'Your reply'
 ```
 
+## Task Delegation Messages
+
+You may receive messages with a `task:` field in the prefix:
+
+```
+[wezterm-bridge from:claude task:review] Review the staged changes in src/auth.ts
+```
+
+This is a structured task request. The task types are:
+
+| Type     | What to do                                              |
+|----------|---------------------------------------------------------|
+| `review` | Review the specified code/changes and report findings   |
+| `audit`  | Security & quality audit of specified files             |
+| `ask`    | Answer the question or give your perspective            |
+| `test`   | Run the specified tests and report results              |
+
+When you respond, include a `status:` field so the sender knows the outcome:
+
+```bash
+wezterm-bridge read <sender>
+wezterm-bridge message <sender> --enter '[task:review status:done] LGTM — no issues found'
+```
+
+Status values: `done` (completed), `blocked` (need more info), `error` (something went wrong).
+
 ## Orchestration
 
 ### Waiting for Results
